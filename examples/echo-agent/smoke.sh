@@ -95,4 +95,27 @@ spec_v=$("$bin" --spec-version)
 [[ "$spec_v" == "cli.v0" ]] \
   || { echo "FAIL: --spec-version = '$spec_v', want 'cli.v0'"; exit 1; }
 
-echo "OK — echo-agent smoke test passed (data + control plane, plain healthz, Studio root, spec-version)"
+echo ">> data-dir persistence: bolt file exists + non-empty"
+bolt_path="${data_dir}/soyaos.bolt"
+[[ -f "$bolt_path" ]] || { echo "FAIL: $bolt_path missing"; exit 1; }
+bolt_size=$(stat -f%z "$bolt_path" 2>/dev/null || stat -c%s "$bolt_path")
+[[ "$bolt_size" -gt 0 ]] || { echo "FAIL: $bolt_path is empty"; exit 1; }
+
+echo ">> persistence restart: kill soyaos, restart on same --data-dir, dev key still verifies"
+kill "$pid" 2>/dev/null || true
+wait "$pid" 2>/dev/null || true
+"$bin" start --listen "$listen" --rpc "$rpc" --data-dir "$data_dir" >/tmp/soyaos-smoke-2.log 2>&1 &
+pid=$!
+for _ in $(seq 1 50); do
+  if curl -fsS "${base}/healthz" >/dev/null 2>&1; then break; fi
+  sleep 0.1
+done
+if ! curl -fsS "${base}/healthz" >/dev/null; then
+  echo "FAIL: soyaos did not restart on same data-dir"
+  cat /tmp/soyaos-smoke-2.log
+  exit 1
+fi
+curl -fsS -H "Authorization: Bearer ${key}" "${base}/v1/models" | grep -q "soya:echo" \
+  || { echo "FAIL: dev key did not verify after restart"; exit 1; }
+
+echo "OK — echo-agent smoke test passed (data + control plane, plain healthz, Studio root, spec-version, bolt persistence + restart)"

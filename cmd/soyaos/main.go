@@ -40,6 +40,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/openaicompat"
 	"github.com/soyaos/soyaos/pkg/orbit"
 	"github.com/soyaos/soyaos/pkg/scope"
+	"github.com/soyaos/soyaos/pkg/store"
 	"github.com/soyaos/soyaos/pkg/version"
 )
 
@@ -124,14 +125,22 @@ func cmdStart(args []string) error {
 	registry := orbit.NewRegistry()
 	registry.SeedSolo(now)
 
-	store := auth.NewMemoryStore()
-	devKey := store.SeedDevKey()
+	// Persistent KV under <data-dir>/soyaos.bolt — single file shared by
+	// auth / scheduler / memory / artifact namespaces.
+	soyaStore, err := store.Open(*dataDir)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer soyaStore.Close()
+
+	keys := auth.NewStoreBacked(soyaStore)
+	devKey := keys.SeedDevKey()
 
 	k := kernel.New()
 	k.Register(kernel.EchoAgent)
 
 	// --- data plane: OpenAI-Compat gateway on :7474 ---
-	gateway := openaicompat.NewServer(k, store)
+	gateway := openaicompat.NewServer(k, keys)
 	dataMux := http.NewServeMux()
 	dataMux.Handle("/v1/", gateway.Handler())
 	dataMux.Handle("/v1/models", gateway.Handler())

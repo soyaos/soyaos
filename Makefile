@@ -13,7 +13,9 @@ BIN_DIR        := bin
 BIN            := $(BIN_DIR)/soyaos
 PKG            := ./...
 GIT_SHA        := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-VERSION        := $(shell sed -n 's/^## \[\([^]]*\)\].*/\1/p' CHANGELOG.md | grep -v Unreleased | head -1)
+# Version sourced from the latest git tag — tags are the source of truth.
+# Falls back to 0.0.0 when no tag exists yet.
+VERSION        := $(shell git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)
 LDFLAGS        := -X github.com/soyaos/soyaos/pkg/version.GitSHA=$(GIT_SHA) -X github.com/soyaos/soyaos/pkg/version.Version=$(VERSION)
 
 .PHONY: all
