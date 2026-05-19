@@ -48,6 +48,20 @@ Three node roles forming the SoyaOS network:
 | 05 | SoyaOS Enterprise Cloud | `ent-cloud` | Multi-tenant SaaS with SSO, SLAs, compliance |
 | 06 | SoyaOS Enterprise Private | `ent-private` | On-prem / air-gapped, customer-managed |
 
+## Concepts
+
+Five concepts you will see again and again across the docs, the CLI, and the code. Each is one Go package away.
+
+| Concept | What it is | Code |
+|---|---|---|
+| **SoyaKernel** | The single-binary core that hosts every other concept. | `pkg/kernel` |
+| **SoyaPack** | The portable, declarative Agent format (manifest + prompts + tools + sandbox). | `specs/specs/soyapack/v0/` + `pkg/soyapack` |
+| **SoyaForge** | The Agent Factory that turns natural-language intent into a SoyaPack manifest. | `pkg/factory` |
+| **SoyaScope** | The append-only event log behind audit, scheduling, and per-second billing. | `pkg/scope` |
+| **SoyaAuth** | API key issuance, scope tokens, and row-scoped JWT for shared artifacts. | `pkg/auth` |
+
+> Aha: paste `base_url`, `api_key`, and `model` into Cherry Studio and chat with your Agent as if it were just another OpenAI model.
+
 ## Repository layout
 
 ```

@@ -48,6 +48,20 @@ SoyaOS 网络由三种节点角色组成：
 | 05 | SoyaOS 企业云版 | `ent-cloud` | 多租户 SaaS + SSO + SLA + 合规 |
 | 06 | SoyaOS 企业私有版 | `ent-private` | 客户自部，含离线 / air-gapped |
 
+## 概念
+
+文档、CLI、代码里反复出现的五个概念，每个概念对应一个 Go 包。
+
+| 概念 | 是什么 | 代码 |
+|---|---|---|
+| **SoyaKernel** | 单二进制内核，承载所有其它概念。 | `pkg/kernel` |
+| **SoyaPack** | 便携、声明式的 Agent 格式（manifest + prompts + tools + sandbox）。 | `specs/specs/soyapack/v0/` + `pkg/soyapack` |
+| **SoyaForge** | Agent 工厂：自然语言意图 → SoyaPack manifest。 | `pkg/factory` |
+| **SoyaScope** | 仅追加的事件日志，承载审计、调度、按秒计费。 | `pkg/scope` |
+| **SoyaAuth** | API Key 颁发、scope token、面向分享产物的 row-scoped JWT。 | `pkg/auth` |
+
+> Aha：把 `base_url`、`api_key`、`model` 粘进 Cherry Studio，就能像调用 OpenAI 模型一样和自己的 Agent 对话。
+
 ## 目录结构
 
 参见 [README.md](README.md#repository-layout)。单一 `go.mod` 位于根目录；前端 dist 通过 `//go:embed` 内嵌进二进制，"一份文件全搞定"。
