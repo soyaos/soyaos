@@ -56,10 +56,13 @@ SoyaOS 网络由三种节点角色组成：
 
 ```bash
 make build
-./bin/soyaos start
+./bin/soyaos start            # 数据面 127.0.0.1:7474 / 控制面 127.0.0.1:7475
 # 在另一终端冒烟测试 OpenAI-Compat 接口
-curl http://localhost:6473/v1/models \
+curl http://127.0.0.1:7474/v1/models \
   -H "Authorization: Bearer sk-soya-dev-local"
+
+# 或直接走 CLI
+./bin/soyaos agent run echo "你好"
 ```
 
 参见 [`examples/echo-agent/`](examples/echo-agent/) 获取第一个可运行的 Agent。

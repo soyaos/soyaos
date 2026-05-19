@@ -11,6 +11,30 @@ releases.
 
 ## [Unreleased]
 
+### Added
+- `pkg/control` — Solo control-plane JSON-over-HTTP RPC at `127.0.0.1:7475`,
+  loopback-only. Exposes `GET /control/v0/healthz`,
+  `GET /control/v0/agents`, `POST /control/v0/agents/{slug}/invoke`.
+- `soyaos --spec-version` — prints `cli.v0` (matches `soyaos/specs`).
+- `soyaos agent create <name>` — scaffolds a SoyaPack v0 Agent directory
+  with `soyapack.yaml` + `prompts/` + `templates/` + `examples/` + `README.md`.
+- `soyaos agent run <slug> "..."` — invokes an Agent through the running
+  gateway and prints the reply.
+- `soyaos start --rpc` flag for the control RPC address.
+- `soyaos start --data-dir` flag with `$XDG_DATA_HOME/soyaos` default.
+- Studio placeholder at `GET /` of the data plane (real Studio later).
+- Recognition of `SOYA_MODEL_API_KEY` env var (BYOK key; stashed for the
+  upcoming Stage 2 LLM providers — not yet used by Echo agent).
+
+### Changed
+- **Breaking** for anyone scripting against the alpha: default OpenAI-Compat
+  listen address moves from `:6473` to `127.0.0.1:7474` (localhost-by-default
+  for Solo). Locked by `soyaos/specs/specs/cli/v0.md`.
+- `/healthz` defaults to plain-text `ok` (per spec). JSON envelope still
+  available via `?format=json`.
+- `soyaos agent list` now talks to the running control RPC (was: ran an
+  in-process kernel inside the CLI process).
+
 ## [0.1.0-alpha.0] — 2026-05-18
 
 First Day-1 scaffolding cut. Not functional yet — this commit only stakes out

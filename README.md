@@ -87,7 +87,7 @@ Single `go.mod` at the root — no multi-module workspace. The binary is one fil
 
 ## Quickstart
 
-> Pre-release: `./soyaos start` boots Planet+Moon+Comet **in-process** and exposes the OpenAI-Compat endpoint on `:6473`. No external dependencies.
+> Pre-release: `./soyaos start` boots Planet+Moon+Comet **in-process** and exposes the OpenAI-Compat data plane on `127.0.0.1:7474` and the control RPC on `127.0.0.1:7475`. Localhost-by-default; no external dependencies.
 
 ```bash
 # Build
@@ -97,8 +97,11 @@ make build
 ./bin/soyaos start
 
 # Smoke-test the OpenAI-Compat endpoint
-curl http://localhost:6473/v1/models \
+curl http://127.0.0.1:7474/v1/models \
   -H "Authorization: Bearer sk-soya-dev-local"
+
+# Talk to the echo agent via the CLI
+./bin/soyaos agent run echo "hello"
 ```
 
 See [`examples/echo-agent/`](examples/echo-agent/) for the first runnable agent.

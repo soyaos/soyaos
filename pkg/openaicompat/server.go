@@ -352,9 +352,11 @@ func newID(prefix string) string {
 	return fmt.Sprintf("%s-%x", prefix, now)
 }
 
-// MustListenAddr returns the canonical default OpenAI-Compat listen address.
-// The 6473 port reads as "SO-Y-S" on a phone keypad.
-const DefaultListenAddr = ":6473"
+// DefaultListenAddr is the canonical default address for the OpenAI-Compat
+// gateway. Locked by specs/cli/v0.md: localhost-by-default for Solo so the
+// gateway is not reachable from other machines on the LAN without explicit
+// reconfiguration. The 7474 port matches Studio's default (specs/cli/v0.md).
+const DefaultListenAddr = "127.0.0.1:7474"
 
 // SupportedPaths is the canonical list of HTTP paths this server owns —
 // useful for callers that want to mount it alongside their own routes.
