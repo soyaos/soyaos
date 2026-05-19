@@ -12,6 +12,11 @@ releases.
 ## [Unreleased]
 
 ### Added
+- `pkg/soyapack` — canonical SoyaPack v0 manifest types, YAML loader
+  (strict at the top level with `x-` extension passthrough) and `Validate()`
+  that enforces the contract from [`soyaos/specs`](https://github.com/soyaos/specs).
+  Three KIND fixtures live at `examples/manifests/{agent,skill,memory}.yaml`.
+  Adds dependency `gopkg.in/yaml.v3`.
 - `pkg/control` — Solo control-plane JSON-over-HTTP RPC at `127.0.0.1:7475`,
   loopback-only. Exposes `GET /control/v0/healthz`,
   `GET /control/v0/agents`, `POST /control/v0/agents/{slug}/invoke`.
@@ -34,6 +39,10 @@ releases.
   available via `?format=json`.
 - `soyaos agent list` now talks to the running control RPC (was: ran an
   in-process kernel inside the CLI process).
+- `pkg/factory` no longer carries the `Manifest` type — `pkg/soyapack`
+  owns it. Factory becomes a thin `Translator` interface that produces
+  `*soyapack.Manifest`. The alpha `Stub` returns `ErrNotImplemented` until
+  the NewsBeam Agent Factory (APP-492) lands.
 
 ## [0.1.0-alpha.0] — 2026-05-18
 
