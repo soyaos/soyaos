@@ -1,0 +1,62 @@
+# Owner: release-eng
+# Purpose: Generate SPDX + CycloneDX SBOMs via Syft and attach to GitHub release
+# Trigger: release published, or manual workflow_dispatch
+# Notes: Requires GITHUB_TOKEN (auto) with contents:write to upload release assets.
+
+name: sbom
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    name: syft SBOM (SPDX + CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-release-assets: true
+          upload-artifact: true
+          artifact-name: sbom-spdx
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-release-assets: true
+          upload-artifact: true
+          artifact-name: sbom-cyclonedx
+
+      - name: Verification hint
+        run: |
+          {
+            echo "## SBOM verification"
+            echo ""
+            echo "Two SBOMs were attached to this release:"
+            echo ""
+            echo "- \`sbom.spdx.json\` (SPDX 2.3, JSON)"
+            echo "- \`sbom.cdx.json\` (CycloneDX 1.5, JSON)"
+            echo ""
+            echo "Scan with grype (grype-compatible formats):"
+            echo ""
+            echo '```sh'
+            echo "grype sbom:./sbom.spdx.json"
+            echo "grype sbom:./sbom.cdx.json"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
