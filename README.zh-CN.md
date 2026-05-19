@@ -81,6 +81,19 @@ curl http://127.0.0.1:7474/v1/models \
 
 参见 [`examples/echo-agent/`](examples/echo-agent/) 获取第一个可运行的 Agent。
 
+### 从任意 OpenAI 兼容客户端接入
+
+SoyaOS 完整复用 OpenAI 的 `/v1/chat/completions` 协议。只要把同样的三个值 —— `base_url`、`api_key`、`model` —— 粘进任意客户端，你的 Agent 就会作为一个虚拟模型出现在模型列表里。
+
+| 客户端 | `base_url` | `api_key` | `model` |
+|---|---|---|---|
+| Cherry Studio | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Cursor | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Continue (VS Code / JetBrains) | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Zed | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+
+> `model` 取值即 Agent 在 SoyaPack manifest 中声明的 `virtual_model_id`（例如 `soya:compo`、`soya:news-beam`）。
+
 ## 贡献
 
 欢迎贡献。SoyaOS 使用 [DCO](https://developercertificate.org/) —— 每个 commit 必须带 `Signed-off-by:`。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。

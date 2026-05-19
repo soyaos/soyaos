@@ -120,6 +120,19 @@ curl http://127.0.0.1:7474/v1/models \
 
 See [`examples/echo-agent/`](examples/echo-agent/) for the first runnable agent.
 
+### Use from any OpenAI-Compatible client
+
+SoyaOS speaks the OpenAI `/v1/chat/completions` API verbatim. Paste the same three values — `base_url`, `api_key`, `model` — into any client and your Agent shows up as a virtual model.
+
+| Client | `base_url` | `api_key` | `model` |
+|---|---|---|---|
+| Cherry Studio | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Cursor | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Continue (VS Code / JetBrains) | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Zed | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+
+> The `model` value is the Agent's `virtual_model_id` declared in its SoyaPack manifest (e.g. `soya:compo`, `soya:news-beam`).
+
 ## Contributing
 
 We welcome contributions. SoyaOS uses [DCO](https://developercertificate.org/) — every commit needs `Signed-off-by:`. See [CONTRIBUTING.md](CONTRIBUTING.md).
