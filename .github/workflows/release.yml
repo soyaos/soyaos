@@ -1,0 +1,86 @@
+# Owner: release-eng
+# Purpose: Sigstore keyless sign all release assets with cosign sign-blob
+# Trigger: release published, or manual workflow_dispatch
+# Notes: Requires GITHUB_TOKEN (auto). OIDC id-token used for cosign keyless.
+
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  sign-artifacts:
+    name: cosign sign-blob (keyless)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          # alpha: use gh release download for the current tag
+          gh release download "${{ github.ref_name }}" -D dist/ || {
+            echo "No release assets found for ${{ github.ref_name }}; nothing to sign."
+            exit 0
+          }
+          ls -la dist/
+
+      - name: Sign each artifact (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          shopt -s nullglob
+          for f in dist/*; do
+            [ -f "${f}" ] || continue
+            case "${f}" in
+              *.sig|*.cert|*.pem) continue ;;
+            esac
+            echo "Signing ${f}"
+            cosign sign-blob \
+              --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.cert" \
+              "${f}"
+          done
+
+      - name: Upload signatures back to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          uploads=(dist/*.sig dist/*.cert)
+          if [ ${#uploads[@]} -gt 0 ]; then
+            gh release upload "${{ github.ref_name }}" "${uploads[@]}" --clobber
+          else
+            echo "No signature artifacts to upload."
+          fi
+
+      - name: Release notes verification
+        run: |
+          {
+            echo "## Release notes verification"
+            echo ""
+            echo "Each release asset is signed with Sigstore keyless cosign."
+            echo "Verify with:"
+            echo ""
+            echo '```sh'
+            echo "cosign verify-blob \\"
+            echo "  --certificate <asset>.cert \\"
+            echo "  --signature   <asset>.sig \\"
+            echo "  --certificate-identity-regexp 'https://github.com/soyaos/soyaos/' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  <asset>"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
