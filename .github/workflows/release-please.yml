@@ -1,0 +1,28 @@
+# Owner: release-eng
+# Purpose: PR-driven changelog + auto tagging via release-please (conventional commits)
+# Trigger: push to main / master
+# Notes: Requires GITHUB_TOKEN (auto). id-token for future provenance work.
+
+name: release-please
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: go
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
