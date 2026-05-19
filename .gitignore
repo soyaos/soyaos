@@ -37,6 +37,9 @@ web/dist/
 /var/
 /data/
 
+# Claude Code agent worktrees (temporary, never commit)
+/.claude/worktrees/
+
 # node / bun (when frontend is added later)
 node_modules/
 .bun/
