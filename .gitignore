@@ -1,0 +1,42 @@
+# Binaries (anchor with leading slash to avoid swallowing cmd/soyaos/ etc.)
+/bin/
+/dist/
+/build/
+/soyaos
+/soyaos-*
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+*.tmp
+coverage.out
+coverage.html
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Embed targets (built externally)
+web/dist/
+
+# Local secrets
+.env
+.env.local
+*.pem
+*.key
+*.p12
+
+# Logs / runtime data
+*.log
+/var/
+/data/
+
+# node / bun (when frontend is added later)
+node_modules/
+.bun/

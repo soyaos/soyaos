@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security disclosure
+    url: https://github.com/soyaos/soyaos/security/advisories/new
+    about: Please do NOT file public issues for security vulnerabilities. Use private reporting.
+  - name: General discussion
+    url: https://github.com/soyaos/soyaos/discussions
+    about: Questions, ideas, and conversations that aren't yet bugs or feature requests.

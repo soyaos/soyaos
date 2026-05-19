@@ -1,0 +1,25 @@
+# SoyaOS CODEOWNERS
+#
+# Each repository area has a primary owning team. Owners are auto-requested
+# for review on matching PRs. Order matters — later entries override earlier ones.
+
+# Default: core maintainers own everything not otherwise claimed.
+*                              @soyaos/core-maintainers
+
+# Protocol / API surface — co-owned by spec team.
+/api/                          @soyaos/core-maintainers @soyaos/spec-team
+
+# Frontend dist (embedded). Owned by frontend team when present.
+/web/                          @soyaos/core-maintainers @soyaos/front-maintainers
+
+# Deploy artifacts.
+/deploy/                       @soyaos/core-maintainers @soyaos/sre-team
+
+# Examples — eco maintainers can review reference agents.
+/examples/                     @soyaos/core-maintainers @soyaos/eco-maintainers
+
+# Plugin interface surface — changes here ripple into closed-source enterprise repo.
+/plugin/                       @soyaos/core-maintainers
+
+# CI/governance.
+/.github/                      @soyaos/core-maintainers
