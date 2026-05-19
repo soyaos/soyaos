@@ -18,7 +18,7 @@ v0.1.0 锁定四个旗舰用户故事（DD-008 ~ DD-011）：
 
 | # | Agent | 画像 | Aha Moment |
 |---|---|---|---|
-| DD-008 | **Compo** | 辅导孩子的家长 | 一篇范文 + 标题 → 一份可打印的写作指引 PDF |
+| DD-008 | **Compo**（[示例仓](https://github.com/soyaos/example-essay-tutor)） | 辅导孩子的家长 | 一篇范文 + 标题 → 一份可打印的写作指引 PDF |
 | DD-009 | **NewsBeam** | AI 知识工作者 | 一句话造 Agent → 每天 9:00 钉钉收到 AI 资讯长图 |
 | DD-010 | **EstateMuse** | 房产自媒体作者 | 一句话 → 500 条选题 Excel + 每行"生成图文/短视频" |
 | DD-011 | **SilentCut** | 独立短视频创作者 | 自然语言 → Remotion 脚本 → Comet 渲染 → MP4 落 NAS |
