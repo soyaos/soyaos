@@ -1,0 +1,27 @@
+# Sample SoyaPack v0 Skill manifest. Skills are pure-or-read-only capabilities
+# other Agents call; they expose no chat surface.
+spec_version: soyapack.v0
+kind: Skill
+name: parse-input
+version: 0.1.0
+description: OCR + PDF-text extraction Tool, callable as tool.parse_input.
+authors:
+  - name: SoyaOS Contributors
+license: MIT
+runtime:
+  compat: ">=0.1.0 <0.2.0"
+determinism: read-only
+
+entry: SKILL.md
+
+capabilities:
+  network_out: []          # local-only OCR; no egress
+  fs_read:
+    - /workdir
+  fs_write: []
+  mcp_tools: []
+  resources:
+    cpu: 2
+    ram_mb: 1024
+    timeout_s: 30
+  determinism_tier: read-only

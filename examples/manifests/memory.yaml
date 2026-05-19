@@ -1,0 +1,30 @@
+# Sample SoyaPack v0 Memory manifest. Memory Packs are pre-built knowledge
+# bundles that other Packs mount.
+spec_version: soyapack.v0
+kind: Memory
+name: house-listings
+version: 0.1.0
+description: Sample real-estate listings memory pack for EstateMuse reference flow.
+authors:
+  - name: SoyaOS Contributors
+license: MIT
+runtime:
+  compat: ">=0.1.0 <0.2.0"
+determinism: read-only
+
+mount:
+  partition: estate-muse-listings
+  access: ro
+  format: embeddings
+  embedding:
+    model: text-embedding-3-large
+    fingerprint: e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3
+    dim: 3072
+
+contents:
+  - path: data/listings.jsonl
+    sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    size: 524288
+  - path: data/embeddings.bin
+    sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    size: 16777216

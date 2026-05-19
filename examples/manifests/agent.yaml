@@ -1,0 +1,85 @@
+# Sample SoyaPack v0 Agent manifest. Used as a Go test fixture and as the
+# canonical reference for `soyaos agent create`.
+spec_version: soyapack.v0
+kind: Agent
+name: hello-agent
+version: 0.1.0
+description: A minimal Agent that demonstrates every Agent-kind field in soyapack.v0.
+authors:
+  - name: SoyaOS Contributors
+    email: hello@soyaos.ai
+license: MIT
+homepage: https://github.com/soyaos/soyaos
+runtime:
+  compat: ">=0.1.0 <0.2.0"
+determinism: read-only
+affinity: any
+deps:
+  lockfile: 0000000000000000000000000000000000000000000000000000000000000000
+
+entry: prompts/main.md
+
+expose:
+  openai_compat: both
+  virtual_model_id: soya:hello
+
+inputs:
+  - name: title
+    type: string
+    optional: true
+  - name: attachments
+    type: array
+    optional: true
+
+prompt:
+  scaffold: minimal-input-high-quality
+  tools: [tool.parse_input]
+
+artifacts:
+  - kind: html
+    schema: hello.v1
+  - kind: pdf
+    schema: hello.v1
+
+schedules:
+  - cron: "0 9 * * *"
+    tz: Asia/Shanghai
+    idempotency_key: "hello:{date}"
+    missed_fire: skip
+
+channels:
+  - kind: dingtalk
+    binding_template: "<bound at deploy>"
+
+actions:
+  - id: regen
+    on: per_row
+    handler: prompts/regen.md
+    timeout: 60s
+    artifacts: [hello.v1]
+
+state:
+  scope: agent
+  store: kv
+
+sandbox:
+  isolation: container
+  image: html-base@0.1.0
+  budget_seconds_max: 60
+  cold_start_target_ms: 3000
+  capabilities:
+    network_out:
+      - host: api.openai.com
+        port: 443
+        proto: https
+    fs_read:
+      - /workdir
+    fs_write:
+      - /workdir/out
+    determinism_tier: read-only
+
+uses: []
+
+x-vendor-note: |
+  Top-level x- keys are passthrough extensions. The validator must accept this
+  manifest verbatim.
