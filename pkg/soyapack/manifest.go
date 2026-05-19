@@ -181,10 +181,16 @@ type SandboxDecl struct {
 // Capabilities is the default-deny capability declaration. Mirrors
 // specs/soyapack/v0/capabilities.md. Implementation enforcement lives in
 // pkg/runtime.Gate; this type only carries the declaration.
+//
+// R0 P0 fail-closed triad: NetworkOut + FSRead + FSWrite + Exec form the
+// minimum gate surface; anything not listed here must be denied at the
+// runtime layer. Exec restricts which argv[0] entries the sandbox may
+// invoke (Stage 5 will enforce; see DeniedError.Capability="exec").
 type Capabilities struct {
 	NetworkOut      []EgressRule   `yaml:"network_out,omitempty" json:"network_out,omitempty"`
 	FSRead          []string       `yaml:"fs_read,omitempty" json:"fs_read,omitempty"`
 	FSWrite         []string       `yaml:"fs_write,omitempty" json:"fs_write,omitempty"`
+	Exec            []string       `yaml:"exec,omitempty" json:"exec,omitempty"`
 	Syscalls        []string       `yaml:"syscalls,omitempty" json:"syscalls,omitempty"`
 	LLM             *LLMCapability `yaml:"llm,omitempty" json:"llm,omitempty"`
 	MCPTools        []string       `yaml:"mcp_tools,omitempty" json:"mcp_tools,omitempty"`

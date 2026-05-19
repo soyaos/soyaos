@@ -181,8 +181,42 @@ func Validate(m *Manifest) error {
 				return wrap("sandbox.isolation must be process/container/microvm, got %q", m.Sandbox.Isolation)
 			}
 		}
+		if m.Sandbox.Capabilities != nil {
+			if err := validateCapabilities(m.Sandbox.Capabilities); err != nil {
+				return err
+			}
+		}
 	}
 
+	// --- top-level Skill capabilities --------------------------------------
+	if m.Capabilities != nil {
+		if err := validateCapabilities(m.Capabilities); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateCapabilities enforces the fail-closed gate surface: any
+// network_out entry must declare a real host, a port in [1, 65535] and
+// one of the canonical protos. Empty fields would be silently treated
+// as "deny all", but a present-but-malformed entry is almost always an
+// authoring bug — reject it loudly here so it never reaches the gate.
+func validateCapabilities(c *Capabilities) error {
+	for i, r := range c.NetworkOut {
+		if r.Host == "" {
+			return wrap("capabilities.network_out[%d].host is required", i)
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			return wrap("capabilities.network_out[%d].port must be in [1,65535], got %d", i, r.Port)
+		}
+		switch r.Proto {
+		case "http", "https", "grpc", "quic":
+		default:
+			return wrap("capabilities.network_out[%d].proto must be one of http/https/grpc/quic, got %q", i, r.Proto)
+		}
+	}
 	return nil
 }
 
