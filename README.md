@@ -78,7 +78,7 @@ soyaos/                        # this repo (core monorepo)
 │   ├── runtime/               # Comet sandbox runtime
 │   ├── auth/                  # SoyaAuth — zero-trust, capability tokens
 │   ├── scope/                 # SoyaScope — observability, replay
-│   ├── modelgw/               # Model Gateway (BYOK / platform / private vLLM)
+│   ├── llmcall/               # LLM call layer behind the OpenAI-Compat Gateway (BYOK / platform / private vLLM)
 │   ├── scheduler/             # cron + one-shot scheduler (DD-007)
 │   ├── connectors/            # Channel Connectors — DingTalk/Feishu/WeChat/... (DD-006)
 │   ├── artifact/              # Artifact abstraction — HTML/PDF/long_image/MD/XLSX/MP4

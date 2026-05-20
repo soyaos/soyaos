@@ -22,7 +22,7 @@ import (
 	"sync"
 
 	"github.com/soyaos/soyaos/pkg/auth"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // VirtualModelPrefix is the locked-in prefix for SoyaOS-hosted virtual
@@ -33,7 +33,7 @@ const VirtualModelPrefix = "soya:"
 // Handler is the per-Agent execution callback. The kernel hands it the
 // authenticated Identity, the upstream chat Request, and a channel into
 // which the Agent streams Chunks.
-type Handler func(ctx context.Context, id auth.Identity, req modelgw.Request, out chan<- modelgw.Chunk) error
+type Handler func(ctx context.Context, id auth.Identity, req llmcall.Request, out chan<- llmcall.Chunk) error
 
 // Agent is a registered Agent descriptor.
 type Agent struct {
@@ -95,14 +95,14 @@ func (k *Kernel) Lookup(modelID string) (Agent, bool) {
 
 // ChatCompletion drives a non-streaming completion. The kernel collects all
 // chunks from the Agent's Handler and concatenates them into a single
-// modelgw.Response.
-func (k *Kernel) ChatCompletion(ctx context.Context, id auth.Identity, req modelgw.Request) (modelgw.Response, error) {
+// llmcall.Response.
+func (k *Kernel) ChatCompletion(ctx context.Context, id auth.Identity, req llmcall.Request) (llmcall.Response, error) {
 	agent, ok := k.Lookup(req.Model)
 	if !ok {
-		return modelgw.Response{}, fmt.Errorf("%w: %s", ErrUnknownAgent, req.Model)
+		return llmcall.Response{}, fmt.Errorf("%w: %s", ErrUnknownAgent, req.Model)
 	}
 
-	out := make(chan modelgw.Chunk, 8)
+	out := make(chan llmcall.Chunk, 8)
 	errCh := make(chan error, 1)
 	go func() { errCh <- agent.Handler(ctx, id, req, out); close(out) }()
 
@@ -114,15 +114,15 @@ func (k *Kernel) ChatCompletion(ctx context.Context, id auth.Identity, req model
 		sb.WriteString(c.Delta)
 	}
 	if err := <-errCh; err != nil {
-		return modelgw.Response{}, err
+		return llmcall.Response{}, err
 	}
-	return modelgw.Response{Model: agent.ModelID(), Content: sb.String()}, nil
+	return llmcall.Response{Model: agent.ModelID(), Content: sb.String()}, nil
 }
 
 // ChatCompletionStream drives a streaming completion. Chunks are written to
 // out as they arrive. The channel is closed by the kernel once the Agent
 // signals Done (or an error occurs).
-func (k *Kernel) ChatCompletionStream(ctx context.Context, id auth.Identity, req modelgw.Request, out chan<- modelgw.Chunk) error {
+func (k *Kernel) ChatCompletionStream(ctx context.Context, id auth.Identity, req llmcall.Request, out chan<- llmcall.Chunk) error {
 	agent, ok := k.Lookup(req.Model)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownAgent, req.Model)

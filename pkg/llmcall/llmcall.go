@@ -1,4 +1,4 @@
-// Package modelgw is the Model Gateway — the LLM-call collection layer.
+// Package llmcall is the LLM call layer behind the OpenAI-Compat Gateway.
 //
 // The architecture spec calls out three modes: BYOK, platform-managed, and
 // private vLLM. v0.1.0-alpha.0 ships only an echo Provider used by the
@@ -7,7 +7,7 @@
 //
 // Real Providers (OpenAI, Anthropic, vLLM, local Ollama, etc.) land in
 // later milestones as the dispatcher grows real model-call paths.
-package modelgw
+package llmcall
 
 import (
 	"context"
@@ -52,7 +52,7 @@ type Provider interface {
 }
 
 // ErrUnknownModel is returned when no Provider is registered for a model id.
-var ErrUnknownModel = errors.New("modelgw: unknown model")
+var ErrUnknownModel = errors.New("llmcall: unknown model")
 
 // Echo is the smoke-test Provider: it returns the user's last message
 // reversed-prefixed with "echo: ". Useful for verifying the OpenAI-Compat

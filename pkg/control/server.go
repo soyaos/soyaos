@@ -29,7 +29,7 @@ import (
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // DefaultListenAddr matches specs/cli/v0.md — localhost loopback on 7475.
@@ -118,9 +118,9 @@ func (s *Server) invokeAgent(w http.ResponseWriter, r *http.Request, slug string
 		writeError(w, http.StatusBadRequest, "missing_prompt", "prompt is required")
 		return
 	}
-	resp, err := s.Kernel.ChatCompletion(r.Context(), auth.Identity{Subject: "control-rpc"}, modelgw.Request{
+	resp, err := s.Kernel.ChatCompletion(r.Context(), auth.Identity{Subject: "control-rpc"}, llmcall.Request{
 		Model:    "soya:" + slug,
-		Messages: []modelgw.Message{{Role: "user", Content: req.Prompt}},
+		Messages: []llmcall.Message{{Role: "user", Content: req.Prompt}},
 	})
 	if err != nil {
 		if errors.Is(err, kernel.ErrUnknownAgent) {

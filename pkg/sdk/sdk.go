@@ -16,7 +16,7 @@ import (
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // Reply is the value returned by an Agent's chat handler. Use New() or
@@ -27,7 +27,7 @@ type Reply struct {
 
 // ChatFunc is the friendlier form of kernel.Handler — authors implement this
 // and the SDK takes care of streaming plumbing.
-type ChatFunc func(ctx context.Context, id auth.Identity, msgs []modelgw.Message) (Reply, error)
+type ChatFunc func(ctx context.Context, id auth.Identity, msgs []llmcall.Message) (Reply, error)
 
 // Agent is an SDK-level Agent descriptor.
 type Agent struct {
@@ -46,7 +46,7 @@ func (a Agent) Build() (kernel.Agent, error) {
 		return kernel.Agent{}, ErrEmptyChat
 	}
 	chat := a.Chat
-	handler := func(ctx context.Context, id auth.Identity, req modelgw.Request, out chan<- modelgw.Chunk) error {
+	handler := func(ctx context.Context, id auth.Identity, req llmcall.Request, out chan<- llmcall.Chunk) error {
 		reply, err := chat(ctx, id, req.Messages)
 		if err != nil {
 			return err
@@ -54,12 +54,12 @@ func (a Agent) Build() (kernel.Agent, error) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case out <- modelgw.Chunk{Delta: reply.Content}:
+		case out <- llmcall.Chunk{Delta: reply.Content}:
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case out <- modelgw.Chunk{Done: true}:
+		case out <- llmcall.Chunk{Done: true}:
 		}
 		return nil
 	}

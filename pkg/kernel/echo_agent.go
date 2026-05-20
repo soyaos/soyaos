@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/soyaos/soyaos/pkg/auth"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // EchoAgent is the reference Agent shipped in v0.1.0-alpha.0. It exists so
@@ -17,7 +17,7 @@ import (
 var EchoAgent = Agent{
 	Slug:        "echo",
 	Description: "Reference echo agent — replies with 'echo: <last user message>'",
-	Handler: func(ctx context.Context, _ auth.Identity, req modelgw.Request, out chan<- modelgw.Chunk) error {
-		return modelgw.Echo{}.GenerateStream(ctx, req, out)
+	Handler: func(ctx context.Context, _ auth.Identity, req llmcall.Request, out chan<- llmcall.Chunk) error {
+		return llmcall.Echo{}.GenerateStream(ctx, req, out)
 	},
 }

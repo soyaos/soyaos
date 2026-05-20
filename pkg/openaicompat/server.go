@@ -28,7 +28,7 @@ import (
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // Server is an http.Handler wiring kernel + auth into the /v1/* surface.
@@ -133,14 +133,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gwReq := modelgw.Request{
+	gwReq := llmcall.Request{
 		Model:       req.Model,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 	}
 	for _, m := range req.Messages {
-		gwReq.Messages = append(gwReq.Messages, modelgw.Message{Role: m.Role, Content: m.Content, Name: m.Name})
+		gwReq.Messages = append(gwReq.Messages, llmcall.Message{Role: m.Role, Content: m.Content, Name: m.Name})
 	}
 
 	if req.Stream {
@@ -167,7 +167,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.Identity, req modelgw.Request) {
+func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.Identity, req llmcall.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAPIError(w, http.StatusInternalServerError, "stream_unsupported", "response writer does not support streaming")
@@ -181,7 +181,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 	chunkID := newID("chatcmpl")
 	created := time.Now().Unix()
 
-	out := make(chan modelgw.Chunk, 8)
+	out := make(chan llmcall.Chunk, 8)
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Kernel.ChatCompletionStream(ctx, id, req, out); close(out) }()
 
@@ -272,9 +272,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "missing_field", "responses requires model + input")
 		return
 	}
-	gwReq := modelgw.Request{
+	gwReq := llmcall.Request{
 		Model:    req.Model,
-		Messages: []modelgw.Message{{Role: "user", Content: req.Input}},
+		Messages: []llmcall.Message{{Role: "user", Content: req.Input}},
 	}
 	resp, err := s.Kernel.ChatCompletion(r.Context(), id, gwReq)
 	if err != nil {
