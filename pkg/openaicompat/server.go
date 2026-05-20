@@ -209,8 +209,10 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 	go func() { errCh <- s.Kernel.ChatCompletionStream(ctx, id, req, out); close(out) }()
 
 	first := true
+	upstreamFinishReason := ""
 	for c := range out {
 		if c.Done {
+			upstreamFinishReason = c.FinishReason
 			break
 		}
 		delta := &chatDelta{Content: c.Delta}
@@ -232,22 +234,54 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 			return
 		}
 	}
-	finish := "stop"
-	tail := chatResp{
-		ID:      chunkID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   req.Model,
-		Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
+
+	// The goroutine closes `out` AFTER writing to errCh, so the err is ready
+	// by the time the loop above exits. Read it before deciding what tail
+	// frame to send: upstream errors must reach the client (via a structured
+	// error frame) instead of being masked by a finish_reason="stop" tail.
+	streamErr := <-errCh
+
+	if streamErr != nil {
+		// Error path: send a structured error frame compatible with OpenAI
+		// streaming conventions (the error object lives at the top level so
+		// SDKs that check `frame.error` see it), then a finish_reason="error"
+		// tail, then [DONE] so well-behaved SSE readers terminate cleanly.
+		_ = writeSSE(w, flusher, map[string]any{
+			"id":      chunkID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   req.Model,
+			"error": map[string]any{
+				"message": streamErr.Error(),
+				"type":    "soyaos_error",
+				"code":    "upstream_stream_error",
+			},
+		})
+		finish := "error"
+		tail := chatResp{
+			ID:      chunkID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   req.Model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
+		}
+		_ = writeSSE(w, flusher, tail)
+	} else {
+		finish := upstreamFinishReason
+		if finish == "" {
+			finish = "stop"
+		}
+		tail := chatResp{
+			ID:      chunkID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   req.Model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
+		}
+		_ = writeSSE(w, flusher, tail)
 	}
-	_ = writeSSE(w, flusher, tail)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
-
-	if err := <-errCh; err != nil {
-		// Stream already started — log via trailer-style data frame.
-		_ = writeSSE(w, flusher, map[string]any{"error": err.Error()})
-	}
 }
 
 // --- Responses API (minimal) ----------------------------------------------

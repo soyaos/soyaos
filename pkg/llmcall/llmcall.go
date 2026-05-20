@@ -38,10 +38,18 @@ type Response struct {
 	OutputTokens int
 }
 
-// Chunk is a streamed delta.
+// Chunk is a streamed delta. Done==true marks the end-of-stream sentinel
+// (per llmcall convention; OpenAI uses an explicit `finish_reason` field on
+// the last chunk, which we surface here so callers can distinguish a
+// natural stop from "length" / "content_filter" / "error".
+//
+// When Done is true, FinishReason holds the upstream's value verbatim
+// (`stop` / `length` / `content_filter` / `error` / ...) — or the empty
+// string when the upstream did not provide one (e.g. the Echo Provider).
 type Chunk struct {
-	Delta string
-	Done  bool
+	Delta        string
+	Done         bool
+	FinishReason string
 }
 
 // Provider executes a single Request.
@@ -91,7 +99,7 @@ func (e Echo) GenerateStream(ctx context.Context, req Request, out chan<- Chunk)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case out <- Chunk{Done: true}:
+	case out <- Chunk{Done: true, FinishReason: "stop"}:
 	}
 	return nil
 }

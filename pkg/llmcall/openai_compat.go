@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -25,10 +26,28 @@ type OpenAICompat struct {
 	Client *http.Client // nil → defaultClient
 }
 
-// defaultClient is reused across calls to amortize TLS handshakes. The 90s
-// timeout sits between "long enough for slow models on cold tokens" and
-// "short enough that a stuck stream eventually unblocks the caller".
-var defaultClient = &http.Client{Timeout: 90 * time.Second}
+// defaultClient is reused across calls to amortize TLS handshakes. We
+// deliberately do NOT set http.Client.Timeout — that field caps the entire
+// request including body read, which truncates long generations (e.g. a
+// 5000-token HTML report from qwen3.6-plus easily blows past 90s). Caller
+// owns the deadline via context.Context, propagated by NewRequestWithContext.
+// The connection-level safety nets below keep stuck TCP from leaking
+// forever.
+var defaultClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second, // connect timeout
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second, // upstream must send headers within 60s
+	},
+}
 
 // Name implements Provider. The host of the base URL is informative for logs
 // without leaking the API key.
@@ -113,6 +132,7 @@ func (p OpenAICompat) GenerateStream(ctx context.Context, req Request, out chan<
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var finishReason string
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -130,18 +150,29 @@ func (p OpenAICompat) GenerateStream(ctx context.Context, req Request, out chan<
 				Delta struct {
 					Content string `json:"content"`
 				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 		}
 		if err := json.Unmarshal([]byte(payload), &frame); err != nil {
 			continue
 		}
-		if len(frame.Choices) == 0 || frame.Choices[0].Delta.Content == "" {
+		if len(frame.Choices) == 0 {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case out <- Chunk{Delta: frame.Choices[0].Delta.Content}:
+		choice := frame.Choices[0]
+		// Content chunks come first; the terminal chunk has empty delta.content
+		// AND a non-null finish_reason — capture both so the gateway can
+		// forward the upstream's true reason ("length" / "content_filter" /
+		// "error") to the client instead of masking it as "stop".
+		if choice.Delta.Content != "" {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case out <- Chunk{Delta: choice.Delta.Content}:
+			}
+		}
+		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			finishReason = *choice.FinishReason
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -150,7 +181,7 @@ func (p OpenAICompat) GenerateStream(ctx context.Context, req Request, out chan<
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case out <- Chunk{Done: true}:
+	case out <- Chunk{Done: true, FinishReason: finishReason}:
 	}
 	return nil
 }
