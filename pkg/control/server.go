@@ -30,6 +30,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
 	"github.com/soyaos/soyaos/pkg/llmcall"
+	"github.com/soyaos/soyaos/pkg/scope"
 )
 
 // DefaultListenAddr matches specs/cli/v0.md — localhost loopback on 7475.
@@ -38,10 +39,21 @@ const DefaultListenAddr = "127.0.0.1:7475"
 // Server is the control-plane HTTP handler.
 type Server struct {
 	Kernel *kernel.Kernel
+	// Usage is the optional per-second metering aggregator. When non-nil,
+	// /control/v0/usage exposes its Query view; when nil, that route
+	// reports an empty list (so the control API stays uniform across
+	// builds that have not wired metering yet).
+	Usage *scope.UsageAggregator
 }
 
 // NewServer wires a control server backed by the given kernel.
 func NewServer(k *kernel.Kernel) *Server { return &Server{Kernel: k} }
+
+// WithUsage attaches a UsageAggregator to s; returns s for chaining.
+func (s *Server) WithUsage(u *scope.UsageAggregator) *Server {
+	s.Usage = u
+	return s
+}
 
 // Handler returns the http.Handler that owns /control/v0/* paths.
 func (s *Server) Handler() http.Handler {
@@ -49,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/control/v0/healthz", s.handleHealthz)
 	mux.HandleFunc("/control/v0/agents", s.handleAgents)
 	mux.HandleFunc("/control/v0/agents/", s.handleAgentChild)
+	mux.HandleFunc("/control/v0/usage", s.handleUsage)
 	return loopbackOnly(mux)
 }
 
@@ -131,6 +144,72 @@ func (s *Server) invokeAgent(w http.ResponseWriter, r *http.Request, slug string
 		return
 	}
 	writeJSON(w, http.StatusOK, invokeResp{Slug: slug, Model: resp.Model, Content: resp.Content})
+}
+
+// --- usage ------------------------------------------------------------------
+
+// usageResp is the wire shape of GET /control/v0/usage. We follow the same
+// {object, data} envelope the /agents endpoint uses so clients can write
+// one decoder for both lists.
+type usageResp struct {
+	Object string               `json:"object"`
+	Data   []scope.UsagePayload `json:"data"`
+}
+
+// handleUsage exposes the UsageAggregator's Query view over HTTP. Query
+// parameters:
+//
+//   - window=today | 7d | 30d (default: today)
+//   - api_key_prefix=...      (optional, exact match)
+//   - agent_slug=...          (optional)
+//   - sandbox_image=...       (optional)
+//
+// `group_by` is accepted but ignored in the alpha — the aggregator already
+// stores at the finest grain (api_key, agent, image, minute) so callers can
+// fold client-side.
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
+		return
+	}
+	if s.Usage == nil {
+		writeJSON(w, http.StatusOK, usageResp{Object: "list", Data: []scope.UsagePayload{}})
+		return
+	}
+	since, err := parseUsageWindow(r.URL.Query().Get("window"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_window", err.Error())
+		return
+	}
+	q := scope.UsageQuery{
+		APIKeyPrefix: r.URL.Query().Get("api_key_prefix"),
+		AgentSlug:    r.URL.Query().Get("agent_slug"),
+		SandboxImage: r.URL.Query().Get("sandbox_image"),
+		Since:        since,
+	}
+	rows, err := s.Usage.Query(r.Context(), q)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "usage_query_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, usageResp{Object: "list", Data: rows})
+}
+
+// parseUsageWindow turns the `window=` query param into a Since bound.
+// Empty / "today" → start of current UTC day. "7d" / "30d" → that many
+// days back. Anything else → error.
+func parseUsageWindow(s string) (time.Time, error) {
+	now := time.Now().UTC()
+	switch s {
+	case "", "today":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC), nil
+	case "7d":
+		return now.Add(-7 * 24 * time.Hour), nil
+	case "30d":
+		return now.Add(-30 * 24 * time.Hour), nil
+	default:
+		return time.Time{}, fmt.Errorf("window must be one of today|7d|30d (got %q)", s)
+	}
 }
 
 // --- healthz ----------------------------------------------------------------
