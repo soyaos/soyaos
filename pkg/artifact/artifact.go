@@ -64,6 +64,20 @@ type Renderer interface {
 	Render(ctx context.Context, snapshot any, dst io.Writer) (Artifact, error)
 }
 
+// StreamingRenderer is the streaming-friendly Renderer DD-011 §R needs for
+// MP4: while the renderer is still producing bytes, downloaders can already
+// consume earlier chunks. Implementations must push every byte through
+// chunks in order, then close the channel before returning.
+//
+// SilentCut reverse-pressure: a 30s SilentCut clip can be 50–200 MB; making
+// the user wait for the whole file before any byte ships is unacceptable.
+// MP4Renderer plus pkg/artifact.ServeStreamingArtifact gives us HTTP-chunked
+// delivery with Range-header resume out of the box.
+type StreamingRenderer interface {
+	Renderer
+	RenderStream(ctx context.Context, snapshot any, chunks chan<- []byte) (Artifact, error)
+}
+
 // Store persists artifacts. Solo uses an in-memory store; other editions
 // substitute object storage.
 type Store interface {
