@@ -48,6 +48,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", s.handleResponses)
+	// Per-row Action trigger (DD-010 / APP-502). The fall-through
+	// "/v1/agents/" prefix catches the parameterised path; the dispatcher
+	// parses {slug} and {action_id} out of the URL.
+	mux.HandleFunc("/v1/agents/", s.handleAgentAction)
 	return mux
 }
 
@@ -360,7 +364,12 @@ const DefaultListenAddr = "127.0.0.1:7474"
 
 // SupportedPaths is the canonical list of HTTP paths this server owns —
 // useful for callers that want to mount it alongside their own routes.
-var SupportedPaths = []string{"/v1/models", "/v1/chat/completions", "/v1/responses"}
+var SupportedPaths = []string{
+	"/v1/models",
+	"/v1/chat/completions",
+	"/v1/responses",
+	"/v1/agents/{slug}/actions/{action_id}",
+}
 
 // PathsString is the SupportedPaths list joined with ", " for human display.
 func PathsString() string { return strings.Join(SupportedPaths, ", ") }

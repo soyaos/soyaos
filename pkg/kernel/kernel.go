@@ -23,6 +23,7 @@ import (
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/llmcall"
+	"github.com/soyaos/soyaos/pkg/soyapack"
 )
 
 // VirtualModelPrefix is the locked-in prefix for SoyaOS-hosted virtual
@@ -37,9 +38,10 @@ type Handler func(ctx context.Context, id auth.Identity, req llmcall.Request, ou
 
 // Agent is a registered Agent descriptor.
 type Agent struct {
-	Slug        string  // matches the suffix after VirtualModelPrefix
-	Description string  // one-line summary
-	Handler     Handler // invocation entry-point
+	Slug        string             // matches the suffix after VirtualModelPrefix
+	Description string             // one-line summary
+	Handler     Handler            // invocation entry-point
+	Manifest    *soyapack.Manifest // optional: declarative manifest for actions/state/etc. (APP-502)
 }
 
 // ModelID returns the canonical virtual model id (e.g. "soya:echo").
@@ -53,6 +55,11 @@ var ErrUnknownAgent = errors.New("kernel: unknown agent / model id")
 type Kernel struct {
 	mu     sync.RWMutex
 	agents map[string]Agent // keyed by full model id ("soya:echo")
+
+	// Per-row Action dispatch (APP-502). Lock is separate from `mu` so an
+	// in-flight action does not block agent registration / lookup.
+	actionMu      sync.RWMutex
+	actionHandler ActionHandler
 }
 
 // New returns an empty kernel.
