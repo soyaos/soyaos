@@ -1,0 +1,159 @@
+// Package process is the ProfileProcess CometProvider — the lightest of the
+// three isolation tiers. It executes commands directly on the host with
+// os/exec, scoped only by argv allowlists from the SoyaPack capability gate.
+//
+// SilentCut (DD-011) reverse-pressure: SilentCut's 30s clip pipeline must
+// land at < 5 min wall-clock and many of its steps (ffmpeg probe, subtitle
+// extraction, tiny ML inferences) do not need a microVM. The process tier
+// exists so those cheap steps avoid Firecracker cold-start tax while still
+// going through the same CometProvider five-method contract Stage 2 froze.
+//
+// alpha shape:
+//   - Provision allocates an in-memory sandbox descriptor (uuid + image +
+//     started-at) — no chroot, no cgroups, no Landlock yet.
+//   - Execute shells out via os.exec.CommandContext. The TODOs below mark
+//     where cgroups v2 (Linux) and Landlock / Seatbelt (macOS) integration
+//     will plug in before this tier ships to operators.
+//   - Cost reports VCPUSeconds derived from wall-clock since Provision; the
+//     metering aggregator (APP-514) refines this to 100ms ticks.
+package process
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"os/exec"
+	"sync"
+	"time"
+
+	"github.com/soyaos/soyaos/pkg/runtime"
+)
+
+// Provider is the ProfileProcess CometProvider.
+type Provider struct {
+	mu        sync.Mutex
+	sandboxes map[runtime.Handle]*sandbox
+}
+
+type sandbox struct {
+	image   string
+	started time.Time
+}
+
+// New returns an empty Provider. Handles are issued by Provision; nothing is
+// scheduled until then.
+func New() *Provider {
+	return &Provider{sandboxes: map[runtime.Handle]*sandbox{}}
+}
+
+// Capabilities advertises the process tier's surface: no network egress (the
+// gate decides per-call), filesystem access yes, exec yes.
+func (*Provider) Capabilities() runtime.Capabilities {
+	return runtime.Capabilities{
+		Profile: runtime.ProfileProcess,
+		Network: false,
+		FS:      true,
+		Exec:    true,
+	}
+}
+
+// Provision records a new sandbox descriptor and returns its opaque Handle.
+// The Image field is informational — the process tier has no image registry.
+func (p *Provider) Provision(_ context.Context, req runtime.ProvisionRequest) (runtime.Handle, error) {
+	if req.Profile != "" && req.Profile != runtime.ProfileProcess {
+		return "", errors.New("process: ProvisionRequest.Profile must be process or empty")
+	}
+	h := runtime.Handle(newID())
+	p.mu.Lock()
+	p.sandboxes[h] = &sandbox{image: req.Image, started: time.Now()}
+	p.mu.Unlock()
+	return h, nil
+}
+
+// Execute runs req.Cmd inside the sandbox identified by h and returns its
+// terminal state. Stdin is piped if non-empty.
+//
+// TODO(SilentCut): wire cgroups v2 (cpu.max / memory.max) on Linux and
+// Landlock LSM where available; on Darwin use Seatbelt
+// (sandbox_init / sandbox-exec) to clamp fs + network. The gate already
+// authorizes the *intent*; the OS-level enforcement is the next hardening
+// pass and intentionally absent from the alpha to keep the contract small.
+func (p *Provider) Execute(ctx context.Context, h runtime.Handle, req runtime.ExecuteRequest) (runtime.ExecuteResult, error) {
+	p.mu.Lock()
+	_, ok := p.sandboxes[h]
+	p.mu.Unlock()
+	if !ok {
+		return runtime.ExecuteResult{}, errors.New("process: unknown handle")
+	}
+	if len(req.Cmd) == 0 {
+		return runtime.ExecuteResult{}, errors.New("process: empty Cmd")
+	}
+	cmd := exec.CommandContext(ctx, req.Cmd[0], req.Cmd[1:]...)
+	if len(req.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(req.Stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			exitCode = ee.ExitCode()
+		} else {
+			// non-exit error (couldn't start, ctx cancel, etc) surfaces both
+			// as ExitCode -1 and via err semantics for the caller.
+			return runtime.ExecuteResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: -1}, err
+		}
+	}
+	return runtime.ExecuteResult{
+		Stdout:   stdout.Bytes(),
+		Stderr:   stderr.Bytes(),
+		ExitCode: exitCode,
+	}, nil
+}
+
+// Terminate releases the sandbox descriptor. The process tier has no
+// long-lived child to kill; subsequent Execute calls on h return an error.
+func (p *Provider) Terminate(_ context.Context, h runtime.Handle) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.sandboxes[h]; !ok {
+		return errors.New("process: unknown handle")
+	}
+	delete(p.sandboxes, h)
+	return nil
+}
+
+// Cost reports a monotonic counter snapshot since Provision. VCPUSeconds is
+// approximated by wall-clock seconds; APP-514's 100ms aggregator refines this.
+func (p *Provider) Cost(_ context.Context, h runtime.Handle) (runtime.CostSnapshot, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s, ok := p.sandboxes[h]
+	if !ok {
+		return runtime.CostSnapshot{}, errors.New("process: unknown handle")
+	}
+	elapsed := time.Since(s.started).Seconds()
+	return runtime.CostSnapshot{
+		VCPUSeconds: int64(elapsed),
+	}, nil
+}
+
+// newID returns a 32-hex-char opaque identifier. We avoid pulling a uuid
+// dependency for a value that callers must treat as opaque anyway.
+func newID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Cannot happen on supported platforms; fall back to a time-based
+		// best-effort identifier rather than panicking.
+		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+// Compile-time assertion that *Provider satisfies the CometProvider contract.
+var _ runtime.CometProvider = (*Provider)(nil)
