@@ -292,7 +292,7 @@ func cmdAgent(args []string) error {
 func cmdAgentList(args []string) error {
 	fs := flag.NewFlagSet("agent list", flag.ContinueOnError)
 	rpc := fs.String("rpc", "http://"+control.DefaultListenAddr, "control RPC base URL")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
 		return err
 	}
 	resp, err := http.Get(*rpc + "/control/v0/agents")
@@ -322,7 +322,7 @@ func cmdAgentRun(args []string) error {
 	fs := flag.NewFlagSet("agent run", flag.ContinueOnError)
 	listen := fs.String("listen", "http://"+openaicompat.DefaultListenAddr, "OpenAI-Compat gateway base URL")
 	apiKey := fs.String("key", "sk-soya-dev-local", "API key for authentication")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
 		return err
 	}
 	rest := fs.Args()

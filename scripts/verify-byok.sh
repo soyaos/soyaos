@@ -193,10 +193,12 @@ echo "HTTP $CODE → $(cat /tmp/wrong.json)"
 [[ "$CODE" == "401" ]] && ok "fail-closed 鉴权工作正常" || bad "预期 401，实际 $CODE"
 
 # -----------------------------------------------------------------------------
-step "Case 8 · CLI dogfooding · ./bin/soyaos agent run llm (flag-before-positional)"
-note "Go stdlib flag.Parse 在第一个 positional 就停止 — 所以 --listen/--key 必须在 slug/prompt 之前"
-./bin/soyaos agent run --listen "$BASE" --key "$KEY" llm \
-  "用一个 emoji 描述 soybean，然后给出三种由它衍生出的食品。"
+step "Case 8 · CLI dogfooding · ./bin/soyaos agent run (any flag order)"
+note "Regression test for the flagorder helper — flags can now appear AFTER"
+note "the slug/prompt; the helper lifts them back in front of fs.Parse."
+./bin/soyaos agent run llm \
+  "用一个 emoji 描述 soybean，然后给出三种由它衍生出的食品。" \
+  --listen "$BASE" --key "$KEY"
 
 # -----------------------------------------------------------------------------
 step "Case 9 · OpenAI SDK 兼容性 · Python 标准客户端调 SoyaOS (urllib, no SDK install)"
