@@ -22,11 +22,18 @@ import (
 type Fire func(ctx context.Context)
 
 // Job is an entry in the scheduler.
+//
+// MissedFire / LastFiredAt are honored by LoadFromStore when re-hydrating
+// a job after process restart (DD-007). The in-memory TimeWheel itself
+// ignores these fields: it only fires on live cron matches. The
+// missed-fire policy is applied exactly once, at hydration time.
 type Job struct {
-	ID             string    // stable identifier; doubles as idempotency key root
-	Cron           string    // 5-field cron expression; empty for one-shot
-	RunAt          time.Time // one-shot trigger time; zero for cron
-	IdempotencyKey string    // optional; protects against duplicate fires
+	ID             string           // stable identifier; doubles as idempotency key root
+	Cron           string           // 5-field cron expression; empty for one-shot
+	RunAt          time.Time        // one-shot trigger time; zero for cron
+	IdempotencyKey string           // optional; protects against duplicate fires
+	MissedFire     MissedFirePolicy // policy applied when re-hydrating after downtime
+	LastFiredAt    time.Time        // wallclock of the most recent successful fire
 	Fire           Fire
 }
 
