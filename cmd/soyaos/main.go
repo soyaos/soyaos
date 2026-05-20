@@ -37,6 +37,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/control"
 	"github.com/soyaos/soyaos/pkg/kernel"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 	"github.com/soyaos/soyaos/pkg/openaicompat"
 	"github.com/soyaos/soyaos/pkg/orbit"
 	"github.com/soyaos/soyaos/pkg/scope"
@@ -47,9 +48,6 @@ import (
 // SpecVersion is the CLI surface version this binary implements.
 // Locked by soyaos/specs/specs/cli/v0.md.
 const SpecVersion = "cli.v0"
-
-// envBYOKKey is the canonical env var name (see soyaos/specs/specs/cli/v0.md).
-const envBYOKKey = "SOYA_MODEL_API_KEY"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -90,9 +88,20 @@ Usage:
   soyaos agent deploy <pack>      register a pack with a running soyaos (alpha: stub)
   soyaos help                     show this message
 
-Environment:
-  SOYA_MODEL_API_KEY              upstream LLM API key (BYOK). Recognized in
-                                  alpha but no real provider is wired yet.
+Environment (all optional — soyaos boots with zero config):
+  SOYA_MODEL_API_KEY              upstream LLM API key (BYOK). When set, the
+                                  binary registers a "soya:llm" Agent that
+                                  proxies any OpenAI-Compatible endpoint.
+  SOYA_MODEL_BASE_URL             upstream base URL.
+                                  Default: https://api.openai.com/v1
+                                  Examples: https://api.deepseek.com/v1,
+                                  https://api.moonshot.cn/v1,
+                                  http://localhost:11434/v1 (Ollama)
+  SOYA_MODEL_DEFAULT              upstream model id used when the caller
+                                  targets a "soya:*" virtual model id.
+                                  Default: gpt-4o-mini
+  SOYAOS_CHROME                   Chrome binary path override for PDF /
+                                  long_image artifact renderers.
 
 Pre-release. APIs are unstable. See https://github.com/soyaos/soyaos for docs.
 `, version.Version, SpecVersion)
@@ -139,6 +148,15 @@ func cmdStart(args []string) error {
 	k := kernel.New()
 	k.Register(kernel.EchoAgent)
 
+	// When the operator supplies SOYA_MODEL_API_KEY (plus optionally
+	// SOYA_MODEL_BASE_URL / SOYA_MODEL_DEFAULT), expose a BYOK Agent at
+	// `soya:llm` backed by an OpenAI-Compatible upstream. Otherwise only the
+	// echo Agent is registered — the binary still boots cleanly.
+	llmCfg := llmcall.LoadConfigFromEnv()
+	if llmCfg.Configured() {
+		k.Register(kernel.NewLLMAgent("llm", llmCfg))
+	}
+
 	// --- data plane: OpenAI-Compat gateway on :7474 ---
 	gateway := openaicompat.NewServer(k, keys)
 	dataMux := http.NewServeMux()
@@ -176,8 +194,6 @@ func cmdStart(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	byok := os.Getenv(envBYOKKey)
-
 	fmt.Fprintf(os.Stdout, "soyaos %s (edition: %s · spec: %s)\n", version.Version, version.Edition, SpecVersion)
 	fmt.Fprintf(os.Stdout, "Nodes (in-process):    %d (planet+moon+comet)\n", len(registry.List()))
 	fmt.Fprintf(os.Stdout, "OpenAI-Compat gateway: http://%s   paths: %s\n", *listen, openaicompat.PathsString())
@@ -185,7 +201,7 @@ func cmdStart(args []string) error {
 	fmt.Fprintf(os.Stdout, "Control RPC:           http://%s/control/v0/   (loopback only)\n", *rpc)
 	fmt.Fprintf(os.Stdout, "Data dir:              %s\n", *dataDir)
 	fmt.Fprintf(os.Stdout, "Dev API key:           %s\n", devKey)
-	fmt.Fprintf(os.Stdout, "Upstream LLM (BYOK):   %s\n", byokStatus(byok))
+	fmt.Fprintf(os.Stdout, "Upstream LLM (BYOK):   %s\n", byokStatus(llmCfg))
 	fmt.Fprintln(os.Stdout, "Registered agents:")
 	for _, a := range k.List() {
 		fmt.Fprintf(os.Stdout, "  %-20s %s\n", a.ModelID(), a.Description)
@@ -228,15 +244,15 @@ func cmdStart(args []string) error {
 	}
 }
 
-func byokStatus(v string) string {
-	if v == "" {
-		return "not set (Echo agent only; real providers land in Stage 2)"
+func byokStatus(cfg llmcall.Config) string {
+	if !cfg.Configured() {
+		return fmt.Sprintf("not set (only soya:echo answers; export %s to enable soya:llm)", llmcall.EnvAPIKey)
 	}
-	masked := v
+	masked := cfg.APIKey
 	if len(masked) > 12 {
 		masked = masked[:6] + "…" + masked[len(masked)-4:]
 	}
-	return fmt.Sprintf("configured (%s)", masked)
+	return fmt.Sprintf("%s · model=%s · key=%s", cfg.BaseURL, cfg.Model, masked)
 }
 
 // defaultDataDir resolves $XDG_DATA_HOME/soyaos with the canonical fallback.
