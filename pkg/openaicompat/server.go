@@ -110,8 +110,22 @@ type chatReqMessage struct {
 type chatChoice struct {
 	Index        int             `json:"index"`
 	Message      *chatReqMessage `json:"message,omitempty"`
-	Delta        *chatReqMessage `json:"delta,omitempty"`
+	Delta        *chatDelta      `json:"delta,omitempty"`
 	FinishReason *string         `json:"finish_reason"`
+}
+
+// chatDelta is the streaming-only counterpart to chatReqMessage. The OpenAI
+// SSE contract emits `role: "assistant"` only on the FIRST chunk, omits both
+// role and content fields on subsequent chunks (sending only the new content
+// delta), and emits an empty delta `{}` on the final chunk that carries
+// finish_reason. Strict clients (Cherry Studio's Zod validator, the OpenAI
+// Node SDK type guards) reject `role: ""` because the schema's role enum is
+// `["assistant","user","system","tool","developer"]` — empty string is not
+// a member. Keeping all fields as ,omitempty so a zero-value chatDelta
+// marshals to `{}` and only populated fields appear on the wire.
+type chatDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type chatResp struct {
@@ -199,9 +213,9 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 		if c.Done {
 			break
 		}
-		var role string
+		delta := &chatDelta{Content: c.Delta}
 		if first {
-			role = "assistant"
+			delta.Role = "assistant"
 			first = false
 		}
 		frame := chatResp{
@@ -211,7 +225,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 			Model:   req.Model,
 			Choices: []chatChoice{{
 				Index: 0,
-				Delta: &chatReqMessage{Role: role, Content: c.Delta},
+				Delta: delta,
 			}},
 		}
 		if err := writeSSE(w, flusher, frame); err != nil {
@@ -224,7 +238,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 		Object:  "chat.completion.chunk",
 		Created: created,
 		Model:   req.Model,
-		Choices: []chatChoice{{Index: 0, Delta: &chatReqMessage{}, FinishReason: &finish}},
+		Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
 	}
 	_ = writeSSE(w, flusher, tail)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")

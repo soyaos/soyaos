@@ -114,6 +114,78 @@ func TestChatCompletions_Stream_EmitsSSE(t *testing.T) {
 	}
 }
 
+// TestChatCompletions_Stream_DeltaSchemaMatchesOpenAI guards against the
+// regression Cherry Studio's Zod validator flagged: chunk deltas were
+// serializing `"role":""` on every frame, which fails the OpenAI streaming
+// schema (role enum is ["assistant","user","system","tool","developer"]).
+// The contract:
+//   - first chunk's delta carries `"role":"assistant"` exactly once,
+//   - subsequent chunks omit the role field entirely (only `"content"`),
+//   - the terminal chunk has an empty delta `{}` plus finish_reason.
+func TestChatCompletions_Stream_DeltaSchemaMatchesOpenAI(t *testing.T) {
+	srv, key := newTestServer(t)
+	body := strings.NewReader(`{"model":"soya:echo","stream":true,"messages":[{"role":"user","content":"abc"}]}`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", body)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := new(bytes.Buffer)
+	_, _ = io.Copy(buf, resp.Body)
+
+	type frame struct {
+		Choices []struct {
+			Delta        map[string]any `json:"delta"`
+			FinishReason *string        `json:"finish_reason"`
+		} `json:"choices"`
+	}
+
+	var frames []frame
+	for _, line := range strings.Split(buf.String(), "\n") {
+		line = strings.TrimPrefix(line, "data: ")
+		line = strings.TrimSpace(line)
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		var f frame
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			t.Fatalf("bad frame %q: %v", line, err)
+		}
+		frames = append(frames, f)
+	}
+	if len(frames) < 2 {
+		t.Fatalf("expected at least 2 frames (content + tail), got %d: %s", len(frames), buf.String())
+	}
+
+	// First frame: role must be "assistant"; never the empty string.
+	firstDelta := frames[0].Choices[0].Delta
+	if role, ok := firstDelta["role"]; !ok || role != "assistant" {
+		t.Errorf("first frame delta.role = %v (ok=%v), want \"assistant\"", role, ok)
+	}
+
+	// Subsequent content frames must NOT carry a `role` key at all.
+	// The strict client rejects role:"" because "" is not in the enum.
+	for i := 1; i < len(frames)-1; i++ {
+		d := frames[i].Choices[0].Delta
+		if _, has := d["role"]; has {
+			t.Errorf("frame[%d] delta unexpectedly carries role: %v", i, d)
+		}
+	}
+
+	// Last frame: empty delta `{}` plus finish_reason="stop".
+	lastChoice := frames[len(frames)-1].Choices[0]
+	if lastChoice.FinishReason == nil || *lastChoice.FinishReason != "stop" {
+		t.Errorf("tail frame missing finish_reason=stop, got %v", lastChoice.FinishReason)
+	}
+	if len(lastChoice.Delta) != 0 {
+		t.Errorf("tail frame delta must be empty object, got %v", lastChoice.Delta)
+	}
+}
+
 func TestChatCompletions_UnknownModel(t *testing.T) {
 	srv, key := newTestServer(t)
 	body := strings.NewReader(`{"model":"soya:missing","messages":[{"role":"user","content":"x"}]}`)
