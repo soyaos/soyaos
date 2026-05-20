@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/soyaos/soyaos/internal/buildinfo"
+	"github.com/soyaos/soyaos/internal/studio"
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/control"
 	"github.com/soyaos/soyaos/pkg/kernel"
@@ -171,15 +172,11 @@ func cmdStart(args []string) error {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, "ok")
 	})
-	dataMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Studio placeholder. Real Studio lands in a later milestone.
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, studioPlaceholder, version.Version, version.Edition, len(k.List()))
-	})
+	// SoyaOS Studio — the embedded SPA from soyaos/studio. The handler does
+	// its own SPA fallback so client-side routes (/chat, /agents, /keys,
+	// /trace) survive a hard reload. /v1/*, /v1/models, /healthz are
+	// registered above and take precedence over this catch-all.
+	dataMux.Handle("/", studio.Handler())
 
 	dataSrv := &http.Server{
 		Addr:              *listen,
@@ -197,7 +194,7 @@ func cmdStart(args []string) error {
 	fmt.Fprintf(os.Stdout, "soyaos %s (edition: %s · spec: %s)\n", version.Version, version.Edition, SpecVersion)
 	fmt.Fprintf(os.Stdout, "Nodes (in-process):    %d (planet+moon+comet)\n", len(registry.List()))
 	fmt.Fprintf(os.Stdout, "OpenAI-Compat gateway: http://%s   paths: %s\n", *listen, openaicompat.PathsString())
-	fmt.Fprintf(os.Stdout, "Studio placeholder:    http://%s/\n", *listen)
+	fmt.Fprintf(os.Stdout, "Studio:                http://%s/                          (chat / agents / keys / trace)\n", *listen)
 	fmt.Fprintf(os.Stdout, "Control RPC:           http://%s/control/v0/   (loopback only)\n", *rpc)
 	fmt.Fprintf(os.Stdout, "Data dir:              %s\n", *dataDir)
 	fmt.Fprintf(os.Stdout, "Dev API key:           %s\n", devKey)
@@ -514,31 +511,3 @@ const gitignoreTemplate = `# Local build output
 .DS_Store
 `
 
-// studioPlaceholder is the HTML served at GET / by the data-plane mux.
-// Real SoyaStudio lands in a later milestone; for now it's a static page
-// confirming the gateway is up, with quick-start curl commands.
-const studioPlaceholder = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<title>SoyaOS</title>
-<style>
-body{font:14px/1.55 ui-sans-serif,system-ui,sans-serif;max-width:720px;margin:48px auto;padding:0 24px;color:#0d0d0d}
-code,pre{font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:#f5f5f5;padding:2px 6px;border-radius:4px}
-pre{padding:12px 16px;overflow-x:auto}
-h1{margin:0 0 8px;font-size:24px}
-.tag{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#888}
-.row{padding:8px 0;border-bottom:1px solid rgba(0,0,0,.05)}
-</style>
-</head><body>
-<div class="tag">SoyaOS · Solo</div>
-<h1>SoyaOS %s</h1>
-<p>Edition: <code>%s</code> · Registered Agents: <code>%d</code></p>
-<p>SoyaStudio is not yet built — this placeholder confirms the gateway is up.</p>
-<h2>Quickstart</h2>
-<pre>curl http://127.0.0.1:7474/v1/models \
-  -H "Authorization: Bearer sk-soya-dev-local"</pre>
-<pre>soyaos agent list
-soyaos agent run echo "hello"</pre>
-<p class="tag">Docs: github.com/soyaos/soyaos · Specs: github.com/soyaos/specs</p>
-</body></html>
-`
