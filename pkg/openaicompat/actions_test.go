@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
@@ -150,6 +151,73 @@ func TestActions_MalformedPath(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status=%d, want 404", resp.StatusCode)
+	}
+}
+
+func TestActions_AcceptsRowToken(t *testing.T) {
+	// Build a server with a RowTokens signer wired up.
+	k := kernel.New()
+	a := kernel.EchoAgent
+	a.Manifest = &soyapack.Manifest{
+		Kind:    soyapack.KindAgent,
+		Name:    "echo",
+		Actions: []soyapack.ActionDecl{{ID: "star", On: "per_row", Handler: "p"}},
+	}
+	k.Register(a)
+	store := auth.NewMemoryStore()
+	signer := auth.NewRowTokenSigner([]byte("test-secret-padding-padding-pad"))
+	s := &Server{Kernel: k, Verifier: store, RowTokens: signer}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	tok, err := signer.Mint("echo", "star", "row-42", "sk-soya-abcd1234", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/v1/agents/echo/actions/star",
+		bytes.NewBufferString(`{"row_id":"row-42"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+}
+
+func TestActions_RowTokenForDifferentRowRejected(t *testing.T) {
+	k := kernel.New()
+	a := kernel.EchoAgent
+	a.Manifest = &soyapack.Manifest{
+		Kind:    soyapack.KindAgent,
+		Name:    "echo",
+		Actions: []soyapack.ActionDecl{{ID: "star", On: "per_row", Handler: "p"}},
+	}
+	k.Register(a)
+	store := auth.NewMemoryStore()
+	signer := auth.NewRowTokenSigner([]byte("test-secret-padding-padding-pad"))
+	s := &Server{Kernel: k, Verifier: store, RowTokens: signer}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// Token issued for row-42 but caller posts row-99 → 401.
+	tok, _ := signer.Mint("echo", "star", "row-42", "sk-soya-abcd", time.Hour)
+	req, _ := http.NewRequest(http.MethodPost,
+		srv.URL+"/v1/agents/echo/actions/star",
+		bytes.NewBufferString(`{"row_id":"row-99"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", resp.StatusCode)
 	}
 }
 

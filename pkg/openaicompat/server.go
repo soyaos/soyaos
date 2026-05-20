@@ -35,6 +35,11 @@ import (
 type Server struct {
 	Kernel   *kernel.Kernel
 	Verifier auth.Verifier
+
+	// RowTokens is an optional signer that accepts row-scoped JWTs on the
+	// per-row Action endpoint (DD-019 / APP-503). When nil, only standard
+	// sk-soya keys are accepted.
+	RowTokens *auth.RowTokenSigner
 }
 
 // NewServer constructs a gateway handler.

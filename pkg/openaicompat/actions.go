@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
 )
 
@@ -30,12 +31,13 @@ type actionRequestBody struct {
 
 // handleAgentAction parses `/v1/agents/{slug}/actions/{action_id}` and
 // dispatches the named action through the kernel.
+//
+// Auth accepts EITHER:
+//   - a standard sk-soya bearer key (resolves to auth.Identity); or
+//   - a row-scoped JWT (DD-019 / APP-503) bound to exactly this
+//     (slug, action_id, row_id) triple. The token's claims must match
+//     the path + body, otherwise the request is rejected 401.
 func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
-	id, err := s.authorize(r)
-	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "invalid_api_key", err.Error())
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
 		return
@@ -54,6 +56,12 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.RowID == "" {
 		writeAPIError(w, http.StatusBadRequest, "missing_field", "row_id is required")
+		return
+	}
+
+	id, authErr := s.authorizeAction(r, slug, actionID, body.RowID)
+	if authErr != nil {
+		writeAPIError(w, http.StatusUnauthorized, "invalid_credentials", authErr.Error())
 		return
 	}
 
@@ -77,6 +85,46 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// authorizeAction resolves the request's Bearer credential to an
+// auth.Identity. It first tries the standard sk-soya verifier; if that
+// fails AND the server has a RowTokens signer configured, it tries to
+// parse the credential as a row-scoped JWT and asserts its claims
+// match the (slug, action_id, row_id) the caller is asking for.
+//
+// Returning an error here always means 401 — we never lookup-by-path
+// because that would leak agent enumeration through auth.
+func (s *Server) authorizeAction(r *http.Request, slug, actionID, rowID string) (auth.Identity, error) {
+	raw := auth.ExtractBearer(r.Header.Get("Authorization"))
+	if raw == "" {
+		return auth.Identity{}, errors.New("missing or malformed Authorization header")
+	}
+
+	// Try the standard verifier first.
+	if id, err := s.Verifier.Verify(r.Context(), raw); err == nil {
+		return id, nil
+	}
+
+	// Fall back to row token. Skip if no signer configured.
+	if s.RowTokens == nil {
+		return auth.Identity{}, errors.New("invalid api key")
+	}
+	claims, err := s.RowTokens.Verify(raw)
+	if err != nil {
+		return auth.Identity{}, errors.New("invalid api key or row token")
+	}
+	if claims.AgentSlug != slug || claims.ActionID != actionID || claims.RowID != rowID {
+		return auth.Identity{}, errors.New("row token does not match this action / row")
+	}
+	// Synthesise an Identity from the token's owner key prefix. KeyID
+	// is the token-bound prefix; Subject is "row-token" so downstream
+	// audit can tell row-token traffic apart from sk-soya traffic.
+	return auth.Identity{
+		KeyID:   claims.OwnerKey,
+		Subject: "row-token:" + claims.OwnerKey,
+		Scopes:  []string{"agents:invoke:row"},
+	}, nil
 }
 
 // parseAgentActionPath extracts (slug, action_id) from a URL of the form
