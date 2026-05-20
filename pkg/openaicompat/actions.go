@@ -29,6 +29,48 @@ type actionRequestBody struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
+// agentRow is one entry returned by GET /v1/agents. Unlike modelRow (which
+// follows the OpenAI /v1/models shape verbatim), this carries the human-
+// readable description from kernel.Agent so a UI can render a "what does
+// this Agent do" column without a second round-trip.
+type agentRow struct {
+	ID          string `json:"id"`          // "soya:echo"
+	Slug        string `json:"slug"`        // "echo"
+	Description string `json:"description"` // free-form
+	Object      string `json:"object"`      // "agent"
+}
+
+// agentsResp is the {object, data} envelope OpenAI-style clients expect.
+type agentsResp struct {
+	Object string     `json:"object"`
+	Data   []agentRow `json:"data"`
+}
+
+// handleAgentList implements GET /v1/agents — the SoyaOS-superset companion
+// to /v1/models. Like /v1/models it requires a bearer key; unlike
+// /v1/models it includes the kernel.Agent description, so an in-binary UI
+// can paint an agent table without reaching the loopback-only control RPC.
+func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
+		return
+	}
+	if _, err := s.authorize(r); err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "invalid_api_key", err.Error())
+		return
+	}
+	rows := make([]agentRow, 0)
+	for _, a := range s.Kernel.List() {
+		rows = append(rows, agentRow{
+			ID:          a.ModelID(),
+			Slug:        a.Slug,
+			Description: a.Description,
+			Object:      "agent",
+		})
+	}
+	writeJSON(w, http.StatusOK, agentsResp{Object: "list", Data: rows})
+}
+
 // handleAgentAction parses `/v1/agents/{slug}/actions/{action_id}` and
 // dispatches the named action through the kernel.
 //

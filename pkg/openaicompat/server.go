@@ -3,9 +3,9 @@
 // It exposes the three endpoints required for "paste base_url and it works"
 // onboarding:
 //
-//   GET  /v1/models                — lists registered Agents as virtual models
-//   POST /v1/chat/completions     — non-stream + SSE streaming
-//   POST /v1/responses            — minimal Responses API (echoes the chat path)
+//	GET  /v1/models                — lists registered Agents as virtual models
+//	POST /v1/chat/completions     — non-stream + SSE streaming
+//	POST /v1/responses            — minimal Responses API (echoes the chat path)
 //
 // Auth is by Bearer token in the canonical "sk-soya-..." format, resolved by
 // pkg/auth. The kernel handles the actual completion.
@@ -53,6 +53,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", s.handleResponses)
+	// SoyaOS superset over the OpenAI surface: GET /v1/agents lists
+	// registered Agents with their descriptions (which /v1/models does not
+	// carry). This gives the embedded Studio — which is served from the
+	// data plane and therefore cannot reach the loopback-only control RPC —
+	// a same-origin agent feed without compromising the control plane
+	// isolation. Exact-path match: the parameterised /v1/agents/{slug}/
+	// actions/{action_id} route below catches anything with a trailing /.
+	mux.HandleFunc("/v1/agents", s.handleAgentList)
 	// Per-row Action trigger (DD-010 / APP-502). The fall-through
 	// "/v1/agents/" prefix catches the parameterised path; the dispatcher
 	// parses {slug} and {action_id} out of the URL.
@@ -292,16 +300,16 @@ type respReq struct {
 }
 
 type respResp struct {
-	ID         string           `json:"id"`
-	Object     string           `json:"object"`
-	Model      string           `json:"model"`
-	Output     []respOutputItem `json:"output"`
-	Created    int64            `json:"created"`
+	ID      string           `json:"id"`
+	Object  string           `json:"object"`
+	Model   string           `json:"model"`
+	Output  []respOutputItem `json:"output"`
+	Created int64            `json:"created"`
 }
 
 type respOutputItem struct {
-	Type    string           `json:"type"`    // "message"
-	Role    string           `json:"role"`    // "assistant"
+	Type    string           `json:"type"` // "message"
+	Role    string           `json:"role"` // "assistant"
 	Content []respOutputText `json:"content"`
 }
 
