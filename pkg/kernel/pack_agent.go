@@ -118,14 +118,20 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 		Manifest:    m,
 	})
 
-	// --- best-effort: wire schedules[] -----------------------------------
+	// --- best-effort: wire channels[] + schedules[] ----------------------
 	//
-	// Intentionally non-fatal: an Agent must remain reachable via the
-	// chat surface even when its scheduler is unwired. Operators see
-	// warnings via the host-installed logger; the kernel itself just
-	// logs and moves on.
-	scheduleHook, logger := k.getHooks()
+	// Both are intentionally non-fatal: an Agent must remain reachable
+	// via the chat surface even when its outbound channel or scheduler
+	// is unwired. Operators see warnings via the host-installed logger;
+	// the kernel itself just logs and moves on.
+	scheduleHook, channelHook, logger := k.getHooks()
 
+	publishers := resolveChannelPublishers(m, channelHook, logger)
+
+	// Schedules — fire == run the Agent's Handler with an empty user
+	// turn, then push the final body through every wired channel
+	// publisher. The handler already streams the final stage; we
+	// collect the stream into a single string before publishing.
 	for i, schedDecl := range m.Schedules {
 		if scheduleHook == nil {
 			logger("kernel: pack %q schedules[%d] declared but no ScheduleHook wired — skipping", m.Name, i)
@@ -140,7 +146,7 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 			MissedFire:     schedDecl.MissedFire,
 			Payload:        schedDecl.Payload,
 		}
-		fire := makeScheduledFire(slug, handler, logger)
+		fire := makeScheduledFire(slug, handler, publishers, m.Description, logger)
 		if err := scheduleHook(jobID, spec, fire); err != nil {
 			logger("kernel: pack %q schedules[%d] hook error: %v — skipping", m.Name, i, err)
 		}
@@ -149,15 +155,57 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 	return nil
 }
 
+// resolveChannelPublishers asks the host's ChannelHook for an outbound
+// publisher per declared channel. Failures are logged and skipped so a
+// missing env var (or unwired hook) cannot prevent the Pack from being
+// chat-reachable.
+func resolveChannelPublishers(
+	m *soyapack.Manifest,
+	hook ChannelHook,
+	logger func(string, ...any),
+) []ChannelPublisher {
+	if len(m.Channels) == 0 {
+		return nil
+	}
+	if hook == nil {
+		if len(m.Channels) > 0 {
+			logger("kernel: pack %q declares %d channel(s) but no ChannelHook wired — outbound disabled",
+				m.Name, len(m.Channels))
+		}
+		return nil
+	}
+	out := make([]ChannelPublisher, 0, len(m.Channels))
+	for i, ch := range m.Channels {
+		pub, err := hook(ChannelBindingSpec{
+			Kind:      ch.Kind,
+			BindingID: ch.BindingID,
+			Secrets:   ch.Secrets,
+		})
+		if err != nil {
+			logger("kernel: pack %q channels[%d] (kind=%s binding=%s): %v — skipping",
+				m.Name, i, ch.Kind, ch.BindingID, err)
+			continue
+		}
+		if pub == nil {
+			continue
+		}
+		out = append(out, pub)
+	}
+	return out
+}
+
 // makeScheduledFire wraps the Agent's Handler so it can be triggered
 // autonomously by the scheduler. There is no caller-supplied user
 // message — the system prompt(s) alone must produce a useful response.
-// Errors during the fire are logged and never propagate to the
-// scheduler (which would otherwise treat them as a missed fire and
-// retry-storm).
+// The collected stream is pushed through every wired ChannelPublisher
+// (DingTalk for now); failures per channel are logged and never
+// propagate to the scheduler (which would otherwise treat them as a
+// missed fire and retry-storm).
 func makeScheduledFire(
 	slug string,
 	handler Handler,
+	publishers []ChannelPublisher,
+	title string,
 	logger func(string, ...any),
 ) func(ctx context.Context) {
 	return func(ctx context.Context) {
@@ -171,12 +219,26 @@ func makeScheduledFire(
 			}, out)
 			close(out)
 		}()
-		// Drain the stream so the handler isn't blocked on a full chan.
+		var sb strings.Builder
 		for c := range out {
-			_ = c
+			if c.Done {
+				continue
+			}
+			sb.WriteString(c.Delta)
 		}
 		if err := <-errCh; err != nil {
 			logger("kernel: scheduled fire for soya:%s handler error: %v", slug, err)
+			return
+		}
+		body := sb.String()
+		if body == "" {
+			logger("kernel: scheduled fire for soya:%s produced empty body — not publishing", slug)
+			return
+		}
+		for i, pub := range publishers {
+			if err := pub.Send(ctx, title, body); err != nil {
+				logger("kernel: scheduled fire for soya:%s channel[%d] send failed: %v", slug, i, err)
+			}
 		}
 	}
 }

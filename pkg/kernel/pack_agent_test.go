@@ -523,6 +523,107 @@ func TestRegisterFromPack_Schedules_WithoutHook_LogsAndContinues(t *testing.T) {
 	}
 }
 
+// fakePublisher records every Send call.
+type fakePublisher struct {
+	mu   sync.Mutex
+	sent []string
+	err  error
+}
+
+func (p *fakePublisher) Send(_ context.Context, _ string, body string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err != nil {
+		return p.err
+	}
+	p.sent = append(p.sent, body)
+	return nil
+}
+
+func TestRegisterFromPack_Channels_ResolvedByHook(t *testing.T) {
+	m := minimalAgentManifest("pushy", "pushy")
+	m.Channels = []soyapack.ChannelDecl{{
+		Kind:      "dingtalk",
+		BindingID: "robot-1",
+		Secrets:   map[string]string{"access_token_ref": "${SOYA_DINGTALK_ACCESS_TOKEN}"},
+	}}
+	m.Schedules = []soyapack.ScheduleDecl{{Cron: "0 9 * * *"}}
+	dir := writePack(t, m, "produce a digest")
+
+	pub := &fakePublisher{}
+	var resolved []ChannelBindingSpec
+
+	type captured struct {
+		fire func(ctx context.Context)
+	}
+	var jobs []captured
+
+	k := New()
+	k.SetChannelHook(func(decl ChannelBindingSpec) (ChannelPublisher, error) {
+		resolved = append(resolved, decl)
+		return pub, nil
+	})
+	k.SetScheduleHook(func(_ string, _ ScheduleSpec, fire func(ctx context.Context)) error {
+		jobs = append(jobs, captured{fire})
+		return nil
+	})
+
+	fake := &fakeProvider{responses: []string{"news body"}}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("ChannelHook called %d times, want 1", len(resolved))
+	}
+	if resolved[0].Kind != "dingtalk" || resolved[0].BindingID != "robot-1" {
+		t.Errorf("ChannelBindingSpec = %+v", resolved[0])
+	}
+	if resolved[0].Secrets["access_token_ref"] != "${SOYA_DINGTALK_ACCESS_TOKEN}" {
+		t.Errorf("secrets[access_token_ref] = %q", resolved[0].Secrets["access_token_ref"])
+	}
+
+	// Firing the schedule must drive the handler + push through the
+	// resolved publisher.
+	if len(jobs) != 1 {
+		t.Fatalf("ScheduleHook calls = %d, want 1", len(jobs))
+	}
+	jobs[0].fire(context.Background())
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.sent) != 1 {
+		t.Fatalf("publisher Send count = %d, want 1", len(pub.sent))
+	}
+	if pub.sent[0] != "news body" {
+		t.Errorf("publisher body = %q, want %q", pub.sent[0], "news body")
+	}
+}
+
+func TestRegisterFromPack_Channels_HookError_DoesNotBlockRegistration(t *testing.T) {
+	m := minimalAgentManifest("broken-ch", "broken-ch")
+	m.Channels = []soyapack.ChannelDecl{{Kind: "dingtalk"}}
+	dir := writePack(t, m, "system")
+
+	var warnings []string
+	k := New()
+	k.SetLogger(func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+	k.SetChannelHook(func(_ ChannelBindingSpec) (ChannelPublisher, error) {
+		return nil, errors.New("env var SOYA_DINGTALK_ACCESS_TOKEN not set")
+	})
+
+	fake := &fakeProvider{}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if _, ok := k.Lookup("soya:broken-ch"); !ok {
+		t.Fatal("agent must still register when channel hook errors")
+	}
+	if len(warnings) == 0 {
+		t.Errorf("expected a warning when channel hook fails")
+	}
+}
+
 func TestRegisterFromPack_ListIncludesAgent(t *testing.T) {
 	m := minimalAgentManifest("listed", "listed")
 	dir := writePack(t, m, "system")

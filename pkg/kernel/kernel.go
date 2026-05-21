@@ -62,13 +62,14 @@ type Kernel struct {
 	actionHandler ActionHandler
 
 	// Optional pluggable hooks consumed by RegisterFromPack when a Pack
-	// declares a `schedules:` (DD-007) block. The host owns the
-	// scheduler implementation; the kernel just forwards specs. When
-	// unset the kernel logs a warning via the host-installed logger and
-	// continues — schedules are best-effort and must never block agent
-	// registration.
+	// declares `schedules:` (DD-007) or `channels:` (DD-006) blocks.
+	// Each hook is independent: a host may wire only the scheduler, only
+	// the channel publisher, both, or neither. When unset the kernel
+	// logs a warning via Warnf and continues — schedules and channels
+	// are best-effort; an unwired hook must never block agent registration.
 	hooksMu      sync.RWMutex
 	scheduleHook ScheduleHook
+	channelHook  ChannelHook
 	logger       func(format string, args ...any)
 }
 
@@ -92,6 +93,30 @@ type ScheduleSpec struct {
 	Payload        map[string]any
 }
 
+// ChannelHook is the per-Pack outbound-publisher resolver. When a Pack
+// declares `channels:`, the kernel asks the host to produce a
+// ChannelPublisher for each entry — typically by looking up the
+// channel kind in a connector registry, resolving the env-var-ref
+// secrets, and binding the result. The kernel never reads env vars
+// directly; resolution stays in the host so test harnesses can
+// inject fake credentials.
+type ChannelHook func(decl ChannelBindingSpec) (ChannelPublisher, error)
+
+// ChannelBindingSpec is the wire shape of one manifest.channels[]
+// entry handed to a ChannelHook.
+type ChannelBindingSpec struct {
+	Kind      string
+	BindingID string
+	Secrets   map[string]string // values are still ${ENV_NAME} refs; host resolves
+}
+
+// ChannelPublisher is the outbound side of a wired channel. The
+// kernel calls Send() with the Agent's final artifact body after a
+// schedule fire (or, eventually, after any chat completion).
+type ChannelPublisher interface {
+	Send(ctx context.Context, title, body string) error
+}
+
 // SetScheduleHook wires the per-Pack scheduler-registration callback.
 func (k *Kernel) SetScheduleHook(h ScheduleHook) {
 	k.hooksMu.Lock()
@@ -99,23 +124,30 @@ func (k *Kernel) SetScheduleHook(h ScheduleHook) {
 	k.scheduleHook = h
 }
 
+// SetChannelHook wires the per-Pack outbound-publisher resolver.
+func (k *Kernel) SetChannelHook(h ChannelHook) {
+	k.hooksMu.Lock()
+	defer k.hooksMu.Unlock()
+	k.channelHook = h
+}
+
 // SetLogger installs a host-side logger for kernel-level warnings
-// (best-effort schedule wiring failures). Defaults to a silent
-// logger.
+// (best-effort schedule/channel wiring failures). Defaults to a
+// silent logger.
 func (k *Kernel) SetLogger(logger func(format string, args ...any)) {
 	k.hooksMu.Lock()
 	defer k.hooksMu.Unlock()
 	k.logger = logger
 }
 
-func (k *Kernel) getHooks() (ScheduleHook, func(format string, args ...any)) {
+func (k *Kernel) getHooks() (ScheduleHook, ChannelHook, func(format string, args ...any)) {
 	k.hooksMu.RLock()
 	defer k.hooksMu.RUnlock()
 	logger := k.logger
 	if logger == nil {
 		logger = func(string, ...any) {}
 	}
-	return k.scheduleHook, logger
+	return k.scheduleHook, k.channelHook, logger
 }
 
 // New returns an empty kernel.

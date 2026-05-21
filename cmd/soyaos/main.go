@@ -40,6 +40,7 @@ import (
 	"github.com/soyaos/soyaos/internal/buildinfo"
 	"github.com/soyaos/soyaos/internal/studio"
 	"github.com/soyaos/soyaos/pkg/auth"
+	"github.com/soyaos/soyaos/pkg/connectors/dingtalk"
 	"github.com/soyaos/soyaos/pkg/control"
 	"github.com/soyaos/soyaos/pkg/kernel"
 	"github.com/soyaos/soyaos/pkg/llmcall"
@@ -173,13 +174,17 @@ func cmdStart(args []string) error {
 		k.Register(kernel.NewLLMAgent("llm", llmCfg))
 	}
 
-	// --- Scheduler (APP-552 schedule leg) --------------------------------
+	// --- Scheduler + channel hooks (APP-552) -----------------------------
 	//
-	// The in-process time wheel ticks at 1Hz; schedules declared in a
-	// Pack manifest are forwarded through k.SetScheduleHook below.
+	// The scheduler ticks at 1Hz against persisted jobs in soyaStore.
+	// Schedules declared in a Pack manifest are registered through the
+	// kernel.ScheduleHook below. Channel publishers (DingTalk for the
+	// alpha) are resolved on-demand by the ChannelHook, which
+	// dereferences ${ENV_NAME} secret refs against the process env.
 	tw := scheduler.NewTimeWheel()
 	defer func() { _ = tw.Stop(context.Background()) }()
 	k.SetScheduleHook(makeScheduleHook(tw, soyaStore))
+	k.SetChannelHook(channelHookForEnv())
 
 	// Re-load every Pack previously deployed under <data-dir>/packs/* so
 	// `soyaos start` is idempotent: a Pack that was deployed via POST
@@ -677,6 +682,80 @@ func makeScheduleHook(tw *scheduler.TimeWheel, s store.Store) kernel.ScheduleHoo
 		}
 		return nil
 	}
+}
+
+// channelHookForEnv returns the kernel.ChannelHook used by `soyaos
+// start`. For the alpha milestone only DingTalk text/markdown push is
+// supported; richer message kinds (long_image, actionCard) require
+// the OSS upload + chromedp render pipeline scheduled for v0.1.x.
+//
+// The hook dereferences `${ENV_NAME}` secret refs at resolve time. A
+// missing env var is reported as an error so RegisterFromPack can
+// log + skip rather than failing registration.
+func channelHookForEnv() kernel.ChannelHook {
+	return func(decl kernel.ChannelBindingSpec) (kernel.ChannelPublisher, error) {
+		switch decl.Kind {
+		case "dingtalk":
+			tokenRef := decl.Secrets["access_token_ref"]
+			secretRef := decl.Secrets["secret_ref"]
+			token, err := resolveEnvRef(tokenRef)
+			if err != nil {
+				return nil, fmt.Errorf("dingtalk access_token_ref: %w", err)
+			}
+			secret, _ := resolveEnvRef(secretRef) // optional; bare-token robots work without HMAC
+			return &dingtalkPublisher{
+				out: &dingtalk.Outbound{AccessToken: token, Secret: secret},
+			}, nil
+		default:
+			// Other channel kinds (feishu / wework / ...) aren't wired
+			// in alpha — returning an error keeps the Agent reachable
+			// over chat while making the gap visible in the operator log.
+			return nil, fmt.Errorf("channel kind %q not wired in alpha", decl.Kind)
+		}
+	}
+}
+
+// dingtalkPublisher is the kernel.ChannelPublisher shim around
+// pkg/connectors/dingtalk.Outbound. Text bodies are sent as markdown
+// when a title is present (so DingTalk renders the digest header) and
+// as plain text otherwise.
+type dingtalkPublisher struct {
+	out *dingtalk.Outbound
+}
+
+func (p *dingtalkPublisher) Send(ctx context.Context, title, body string) error {
+	if title == "" {
+		return p.out.Send(ctx, dingtalk.Message{Kind: dingtalk.KindText, Text: body})
+	}
+	return p.out.Send(ctx, dingtalk.Message{
+		Kind:     dingtalk.KindMarkdown,
+		Title:    title,
+		Markdown: body,
+	})
+}
+
+// resolveEnvRef accepts either a `${ENV_NAME}` ref or an empty string.
+// Empty input returns ("", nil); a populated ref must resolve to a
+// non-empty env value or the call errors. Inline secrets (anything
+// that doesn't look like `${...}`) are rejected — soyapack.Validate
+// already enforces this, but the runtime double-checks so a manually
+// constructed ChannelBindingSpec can't smuggle a literal through.
+func resolveEnvRef(ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(ref, "${") || !strings.HasSuffix(ref, "}") {
+		return "", fmt.Errorf("not an ${ENV_NAME} ref: %q", ref)
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(ref, "${"), "}")
+	if name == "" {
+		return "", fmt.Errorf("empty env name")
+	}
+	v := os.Getenv(name)
+	if v == "" {
+		return "", fmt.Errorf("env var %s is not set", name)
+	}
+	return v, nil
 }
 
 func isValidSlug(s string) bool {
