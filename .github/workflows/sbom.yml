@@ -2,6 +2,9 @@
 # Purpose: Generate SPDX + CycloneDX SBOMs via Syft and attach to GitHub release
 # Trigger: release published, or manual workflow_dispatch
 # Notes: Requires GITHUB_TOKEN (auto) with contents:write to upload release assets.
+#        Two SBOM formats are emitted so downstream tooling can pick whichever
+#        it groks: SPDX 2.3 (the OSI/Linux Foundation standard) and CycloneDX
+#        1.5 (the OWASP/grype-friendly format).
 
 name: sbom
 
@@ -29,7 +32,9 @@ jobs:
           path: .
           format: spdx-json
           output-file: sbom.spdx.json
-          upload-release-assets: true
+          # Only attach to releases when running for a real release event;
+          # workflow_dispatch runs still upload the artifact for inspection.
+          upload-release-assets: ${{ github.event_name == 'release' }}
           upload-artifact: true
           artifact-name: sbom-spdx
 
@@ -39,7 +44,7 @@ jobs:
           path: .
           format: cyclonedx-json
           output-file: sbom.cdx.json
-          upload-release-assets: true
+          upload-release-assets: ${{ github.event_name == 'release' }}
           upload-artifact: true
           artifact-name: sbom-cyclonedx
 
