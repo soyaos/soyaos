@@ -127,10 +127,28 @@ type Input struct {
 }
 
 // Prompt holds prompt-scaffolding hints.
+//
+// Two prompt-body shapes are supported and mutually exclusive with
+// the top-level `entry`:
+//
+//   - `entry` (top-level) — single system prompt file (the v0 default).
+//   - `prompt.steps[]`    — ordered chain of N prompt files; each step's
+//     full response is fed as the user input of the next. The kernel
+//     streams only the final step back to the caller. (APP-550 Compo
+//     Phase B)
 type Prompt struct {
 	Scaffold string        `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
 	Tools    []string      `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Steps    []PromptStep  `yaml:"steps,omitempty" json:"steps,omitempty"`
 	Upstream *UpstreamDecl `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+}
+
+// PromptStep is one stage in a `prompt.steps[]` chain. Prompt is a path
+// relative to the Pack root; ID is a short stable handle used in logs
+// and trace spans so operators can pin which stage failed.
+type PromptStep struct {
+	ID     string `yaml:"id" json:"id"`
+	Prompt string `yaml:"prompt" json:"prompt"`
 }
 
 // UpstreamDecl is the per-Agent BYOK upstream override declared under
@@ -165,9 +183,23 @@ type ScheduleDecl struct {
 }
 
 // ChannelDecl binds the Agent to an external channel (DD-006).
+//
+// Two forms coexist for alpha:
+//
+//   - BindingTemplate: a free-form placeholder filled at deploy time
+//     (the original v0 shape; kept for forward compat).
+//   - BindingID + Secrets: a deploy-time-locked binding plus an
+//     env-var-ref secret map. Used by NewsBeam (APP-552) so a Pack
+//     can declare *which* DingTalk robot it pushes to without
+//     embedding creds in the manifest.
+//
+// Secret values must be of the form `${ENV_NAME}`; inline secrets are
+// forbidden by Validate.
 type ChannelDecl struct {
-	Kind            string `yaml:"kind" json:"kind"`
-	BindingTemplate string `yaml:"binding_template,omitempty" json:"binding_template,omitempty"`
+	Kind            string            `yaml:"kind" json:"kind"`
+	BindingTemplate string            `yaml:"binding_template,omitempty" json:"binding_template,omitempty"`
+	BindingID       string            `yaml:"binding_id,omitempty" json:"binding_id,omitempty"`
+	Secrets         map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // ActionDecl describes a row / button / api action trigger (DD-010).

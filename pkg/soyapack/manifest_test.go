@@ -168,6 +168,167 @@ func TestValidate_AgentRequiresEntryAndExpose(t *testing.T) {
 	}
 }
 
+// --- prompt.steps[] (APP-550 Compo Phase B) ---------------------------------
+
+func TestValidate_PromptSteps_AcceptedAsAlternativeToEntry(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Entry = ""
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{
+			{ID: "analyze", Prompt: "prompts/analyze.md"},
+			{ID: "generate", Prompt: "prompts/generate.md"},
+		},
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(prompt.steps only) = %v, want nil", err)
+	}
+}
+
+func TestValidate_PromptSteps_MutuallyExclusiveWithEntry(t *testing.T) {
+	m := minimalAgentManifest() // already has Entry set
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{{ID: "a", Prompt: "prompts/a.md"}},
+	}
+	err := soyapack.Validate(m)
+	if err == nil {
+		t.Fatal("Validate(entry + prompt.steps) returned nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusion, got %v", err)
+	}
+}
+
+func TestValidate_PromptSteps_RejectsMissingFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []soyapack.PromptStep
+	}{
+		{"missing id", []soyapack.PromptStep{{Prompt: "prompts/a.md"}}},
+		{"missing prompt", []soyapack.PromptStep{{ID: "x"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := minimalAgentManifest()
+			m.Entry = ""
+			m.Prompt = &soyapack.Prompt{Steps: c.steps}
+			if err := soyapack.Validate(m); err == nil {
+				t.Fatal("Validate returned nil")
+			}
+		})
+	}
+}
+
+func TestValidate_PromptSteps_RejectsDuplicateID(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Entry = ""
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{
+			{ID: "x", Prompt: "a.md"},
+			{ID: "x", Prompt: "b.md"},
+		},
+	}
+	if err := soyapack.Validate(m); err == nil {
+		t.Fatal("Validate(duplicate step id) returned nil")
+	}
+}
+
+// --- channels[].secrets (APP-552 NewsBeam) ----------------------------------
+
+func TestValidate_ChannelSecrets_AcceptsEnvRef(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Channels = []soyapack.ChannelDecl{{
+		Kind:      "dingtalk",
+		BindingID: "news-beam-test",
+		Secrets: map[string]string{
+			"access_token_ref": "${SOYA_DINGTALK_ACCESS_TOKEN}",
+			"secret_ref":       "${SOYA_DINGTALK_SECRET}",
+		},
+	}}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(channel with env-ref secrets) = %v, want nil", err)
+	}
+}
+
+func TestValidate_ChannelSecrets_RejectsInline(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Channels = []soyapack.ChannelDecl{{
+		Kind:    "dingtalk",
+		Secrets: map[string]string{"access_token_ref": "tk-deadbeef"},
+	}}
+	if err := soyapack.Validate(m); err == nil {
+		t.Fatal("Validate(inline channel secret) returned nil")
+	}
+}
+
+func TestLoad_PromptStepsRoundTrip(t *testing.T) {
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: chained
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+expose: { openai_compat: chat, virtual_model_id: soya:chained }
+prompt:
+  steps:
+    - { id: analyze, prompt: prompts/analyze.md }
+    - { id: generate, prompt: prompts/generate.md }
+    - { id: refine, prompt: prompts/refine.md }
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if m.Prompt == nil || len(m.Prompt.Steps) != 3 {
+		t.Fatalf("steps not parsed: prompt=%+v", m.Prompt)
+	}
+	if m.Prompt.Steps[1].ID != "generate" || m.Prompt.Steps[1].Prompt != "prompts/generate.md" {
+		t.Errorf("steps[1] = %+v", m.Prompt.Steps[1])
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(chained) = %v", err)
+	}
+}
+
+func TestLoad_ChannelsWithSecretsRoundTrip(t *testing.T) {
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: pushy
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+entry: prompts/main.md
+expose: { openai_compat: chat, virtual_model_id: soya:pushy }
+channels:
+  - kind: dingtalk
+    binding_id: my-robot
+    secrets:
+      access_token_ref: ${SOYA_DINGTALK_ACCESS_TOKEN}
+      secret_ref: ${SOYA_DINGTALK_SECRET}
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if len(m.Channels) != 1 {
+		t.Fatalf("channels not parsed: %+v", m.Channels)
+	}
+	if m.Channels[0].BindingID != "my-robot" {
+		t.Errorf("binding_id = %q", m.Channels[0].BindingID)
+	}
+	if m.Channels[0].Secrets["access_token_ref"] != "${SOYA_DINGTALK_ACCESS_TOKEN}" {
+		t.Errorf("secrets[access_token_ref] = %q", m.Channels[0].Secrets["access_token_ref"])
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(channels) = %v", err)
+	}
+}
+
 func TestValidate_RejectsBadVirtualModelID(t *testing.T) {
 	bad := []string{"openai/gpt-4", "Soya:x", "soya:BAD_CASE", ""}
 	for _, vid := range bad {

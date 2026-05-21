@@ -155,6 +155,15 @@ func Validate(m *Manifest) error {
 		default:
 			return wrap("channels[%d].kind %q not in {dingtalk,feishu,wework,wechat-mp,wechat-cs,webhook}", i, c.Kind)
 		}
+		// Secrets must be ${ENV_NAME} refs; inline secrets are
+		// forbidden so a leaked manifest never leaks creds. The same
+		// rule already governs prompt.upstream.api_key_ref (APP-543);
+		// channel.secrets[*] follows the precedent.
+		for k, v := range c.Secrets {
+			if !reAPIKeyRef.MatchString(v) {
+				return wrap("channels[%d].secrets[%q] must be of the form ${ENV_NAME} (got %q)", i, k, v)
+			}
+		}
 	}
 
 	// --- actions ------------------------------------------------------------
@@ -235,8 +244,35 @@ func validateCapabilities(c *Capabilities) error {
 }
 
 func validateAgent(m *Manifest) error {
-	if m.Entry == "" {
-		return wrap("Agent: entry is required")
+	// Prompt body shape: exactly one of `entry` or `prompt.steps[]`.
+	// Both forms are valid v0 surfaces:
+	//
+	//   - entry        — single system prompt (the default).
+	//   - prompt.steps — ordered N-stage chain (APP-550 Phase B).
+	//
+	// Both empty is a manifest authoring bug; both set is ambiguous and
+	// we refuse it loudly rather than silently picking one.
+	hasSteps := m.Prompt != nil && len(m.Prompt.Steps) > 0
+	switch {
+	case m.Entry == "" && !hasSteps:
+		return wrap("Agent: either entry or prompt.steps is required")
+	case m.Entry != "" && hasSteps:
+		return wrap("Agent: entry and prompt.steps are mutually exclusive")
+	}
+	if hasSteps {
+		seen := map[string]struct{}{}
+		for i, s := range m.Prompt.Steps {
+			if s.ID == "" {
+				return wrap("Agent: prompt.steps[%d].id is required", i)
+			}
+			if s.Prompt == "" {
+				return wrap("Agent: prompt.steps[%d].prompt is required", i)
+			}
+			if _, dup := seen[s.ID]; dup {
+				return wrap("Agent: prompt.steps[%d].id %q is duplicated", i, s.ID)
+			}
+			seen[s.ID] = struct{}{}
+		}
 	}
 	if m.Expose == nil {
 		return wrap("Agent: expose is required")
