@@ -414,9 +414,59 @@ func cmdAgentCreate(args []string) error {
 	return nil
 }
 
+// cmdAgentBuild produces a canonical (reproducible) .spk archive from a
+// SoyaPack source directory. The archive is a gzipped tar of every regular
+// file in the source tree (minus a small exclusion set — see packExclude)
+// with every per-file timestamp / uid / gid / username normalized so two
+// builds of the same tree produce byte-identical bytes.
 func cmdAgentBuild(args []string) error {
-	// alpha.0 stub — full implementation lives in Stage 2 S2-A2 (pkg/soyapack).
-	return errors.New("agent build: not implemented in v0.1.0-alpha.0 — see roadmap S2-A2 (pkg/soyapack)")
+	src := "."
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			src = a
+			break
+		}
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("agent build: stat %s: %w", src, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("agent build: %s is not a directory", src)
+	}
+
+	manifestPath := filepath.Join(src, "soyapack.yaml")
+	m, err := soyapack.LoadFromFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	if err := soyapack.Validate(m); err != nil {
+		return err
+	}
+
+	distDir := filepath.Join(src, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		return fmt.Errorf("agent build: mkdir dist: %w", err)
+	}
+	spkPath := filepath.Join(distDir, fmt.Sprintf("%s-%s.spk", m.Name, m.Version))
+	sumPath := spkPath + ".sha256"
+
+	sum, size, err := buildSPK(src, spkPath)
+	if err != nil {
+		return fmt.Errorf("agent build: %w", err)
+	}
+
+	sumLine := fmt.Sprintf("%s  %s\n", sum, filepath.Base(spkPath))
+	if err := os.WriteFile(sumPath, []byte(sumLine), 0o644); err != nil {
+		return fmt.Errorf("agent build: write sha256: %w", err)
+	}
+
+	relSpk, err := filepath.Rel(src, spkPath)
+	if err != nil {
+		relSpk = spkPath
+	}
+	fmt.Printf("built %s · sha256=%s · size=%d\n", relSpk, sum, size)
+	return nil
 }
 
 func cmdAgentDeploy(args []string) error {
