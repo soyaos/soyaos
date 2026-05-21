@@ -45,6 +45,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/llmcall"
 	"github.com/soyaos/soyaos/pkg/openaicompat"
 	"github.com/soyaos/soyaos/pkg/orbit"
+	"github.com/soyaos/soyaos/pkg/scheduler"
 	"github.com/soyaos/soyaos/pkg/scope"
 	"github.com/soyaos/soyaos/pkg/soyapack"
 	"github.com/soyaos/soyaos/pkg/store"
@@ -159,6 +160,9 @@ func cmdStart(args []string) error {
 
 	k := kernel.New()
 	k.Register(kernel.EchoAgent)
+	k.SetLogger(func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "[kernel] "+format+"\n", args...)
+	})
 
 	// When the operator supplies SOYA_MODEL_API_KEY (plus optionally
 	// SOYA_MODEL_BASE_URL / SOYA_MODEL_DEFAULT), expose a BYOK Agent at
@@ -168,6 +172,14 @@ func cmdStart(args []string) error {
 	if llmCfg.Configured() {
 		k.Register(kernel.NewLLMAgent("llm", llmCfg))
 	}
+
+	// --- Scheduler (APP-552 schedule leg) --------------------------------
+	//
+	// The in-process time wheel ticks at 1Hz; schedules declared in a
+	// Pack manifest are forwarded through k.SetScheduleHook below.
+	tw := scheduler.NewTimeWheel()
+	defer func() { _ = tw.Stop(context.Background()) }()
+	k.SetScheduleHook(makeScheduleHook(tw, soyaStore))
 
 	// Re-load every Pack previously deployed under <data-dir>/packs/* so
 	// `soyaos start` is idempotent: a Pack that was deployed via POST
@@ -635,6 +647,36 @@ func reloadDeployedPacks(dataDir string, k *kernel.Kernel) (loaded int, warnings
 		loaded++
 	}
 	return loaded, warnings
+}
+
+// makeScheduleHook returns the kernel.ScheduleHook used by `soyaos
+// start`. It translates the kernel-level ScheduleSpec into a
+// scheduler.Job and adds it to the time wheel, while also persisting
+// the job's spec so a process restart re-hydrates it. Idempotency
+// keys are honored across the dedup window (DD-007 §missed-fire).
+func makeScheduleHook(tw *scheduler.TimeWheel, s store.Store) kernel.ScheduleHook {
+	return func(jobID string, spec kernel.ScheduleSpec, fire func(ctx context.Context)) error {
+		policy := scheduler.MissedFirePolicy(spec.MissedFire)
+		if policy == "" {
+			policy = scheduler.MissedFireSkip
+		}
+		j := scheduler.Job{
+			ID:             jobID,
+			Cron:           spec.Cron,
+			IdempotencyKey: spec.IdempotencyKey,
+			MissedFire:     policy,
+			Fire:           fire,
+		}
+		// SoyaPack v0 only ships cron schedules from the manifest layer;
+		// one-shot RunAt support arrives once the spec surfaces it.
+		if err := tw.Add(j); err != nil {
+			return fmt.Errorf("time wheel add: %w", err)
+		}
+		if err := scheduler.SavePersistent(context.Background(), s, j, policy); err != nil {
+			return fmt.Errorf("scheduler.SavePersistent: %w", err)
+		}
+		return nil
+	}
 }
 
 func isValidSlug(s string) bool {

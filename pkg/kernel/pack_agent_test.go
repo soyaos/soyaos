@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -431,6 +432,94 @@ func TestRegisterFromPack_PromptSteps_RejectsEntryAndStepsTogether(t *testing.T)
 	}
 	if err := New().RegisterFromPack(m, t.TempDir()); err == nil {
 		t.Fatal("RegisterFromPack(entry + steps) returned nil")
+	}
+}
+
+// --- schedules + channels hooks (APP-552 NewsBeam) --------------------------
+
+func TestRegisterFromPack_Schedules_InvokesHook(t *testing.T) {
+	m := minimalAgentManifest("ticker", "ticker")
+	m.Schedules = []soyapack.ScheduleDecl{{
+		Cron:           "0 9 * * *",
+		MissedFire:     "once",
+		IdempotencyKey: "ticker:{date}",
+	}}
+	dir := writePack(t, m, "system")
+
+	type captured struct {
+		jobID string
+		spec  ScheduleSpec
+		fire  func(ctx context.Context)
+	}
+	var got []captured
+	k := New()
+	k.SetScheduleHook(func(jobID string, spec ScheduleSpec, fire func(ctx context.Context)) error {
+		got = append(got, captured{jobID, spec, fire})
+		return nil
+	})
+
+	fake := &fakeProvider{responses: []string{"digest body"}}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ScheduleHook called %d times, want 1", len(got))
+	}
+	if got[0].jobID != "pack:ticker:0" {
+		t.Errorf("jobID = %q", got[0].jobID)
+	}
+	if got[0].spec.Cron != "0 9 * * *" {
+		t.Errorf("spec.Cron = %q", got[0].spec.Cron)
+	}
+	if got[0].spec.MissedFire != "once" {
+		t.Errorf("spec.MissedFire = %q", got[0].spec.MissedFire)
+	}
+	if got[0].spec.IdempotencyKey != "ticker:{date}" {
+		t.Errorf("spec.IdempotencyKey = %q", got[0].spec.IdempotencyKey)
+	}
+
+	// Invoking the Fire callback drives the Agent's Handler with no
+	// user messages — the system prompt seeds everything.
+	got[0].fire(context.Background())
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.got) == 0 {
+		t.Fatal("Fire() did not invoke provider")
+	}
+	for _, msg := range fake.got[0].Messages {
+		if msg.Role == "user" {
+			t.Errorf("scheduled fire produced user message: %+v", msg)
+		}
+	}
+}
+
+func TestRegisterFromPack_Schedules_WithoutHook_LogsAndContinues(t *testing.T) {
+	m := minimalAgentManifest("orphan-sched", "orphan-sched")
+	m.Schedules = []soyapack.ScheduleDecl{{Cron: "0 * * * *"}}
+	dir := writePack(t, m, "system")
+
+	var warnings []string
+	k := New()
+	k.SetLogger(func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+
+	fake := &fakeProvider{}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if _, ok := k.Lookup("soya:orphan-sched"); !ok {
+		t.Fatal("agent must still register even without a ScheduleHook")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "no ScheduleHook wired") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a 'no ScheduleHook wired' warning, got %v", warnings)
 	}
 }
 

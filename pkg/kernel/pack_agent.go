@@ -117,7 +117,68 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 		Handler:     handler,
 		Manifest:    m,
 	})
+
+	// --- best-effort: wire schedules[] -----------------------------------
+	//
+	// Intentionally non-fatal: an Agent must remain reachable via the
+	// chat surface even when its scheduler is unwired. Operators see
+	// warnings via the host-installed logger; the kernel itself just
+	// logs and moves on.
+	scheduleHook, logger := k.getHooks()
+
+	for i, schedDecl := range m.Schedules {
+		if scheduleHook == nil {
+			logger("kernel: pack %q schedules[%d] declared but no ScheduleHook wired — skipping", m.Name, i)
+			continue
+		}
+		jobID := fmt.Sprintf("pack:%s:%d", slug, i)
+		spec := ScheduleSpec{
+			Cron:           schedDecl.Cron,
+			Once:           schedDecl.Once,
+			TZ:             schedDecl.TZ,
+			IdempotencyKey: schedDecl.IdempotencyKey,
+			MissedFire:     schedDecl.MissedFire,
+			Payload:        schedDecl.Payload,
+		}
+		fire := makeScheduledFire(slug, handler, logger)
+		if err := scheduleHook(jobID, spec, fire); err != nil {
+			logger("kernel: pack %q schedules[%d] hook error: %v — skipping", m.Name, i, err)
+		}
+	}
+
 	return nil
+}
+
+// makeScheduledFire wraps the Agent's Handler so it can be triggered
+// autonomously by the scheduler. There is no caller-supplied user
+// message — the system prompt(s) alone must produce a useful response.
+// Errors during the fire are logged and never propagate to the
+// scheduler (which would otherwise treat them as a missed fire and
+// retry-storm).
+func makeScheduledFire(
+	slug string,
+	handler Handler,
+	logger func(string, ...any),
+) func(ctx context.Context) {
+	return func(ctx context.Context) {
+		out := make(chan llmcall.Chunk, 8)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- handler(ctx, auth.Identity{Subject: "system:scheduler"}, llmcall.Request{
+				Model:    VirtualModelPrefix + slug,
+				Messages: nil, // scheduled trigger — system prompts alone seed the chain
+				Stream:   true,
+			}, out)
+			close(out)
+		}()
+		// Drain the stream so the handler isn't blocked on a full chan.
+		for c := range out {
+			_ = c
+		}
+		if err := <-errCh; err != nil {
+			logger("kernel: scheduled fire for soya:%s handler error: %v", slug, err)
+		}
+	}
 }
 
 // promptBody pairs a step id with its pre-loaded system prompt. For the

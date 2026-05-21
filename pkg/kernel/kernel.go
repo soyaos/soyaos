@@ -60,6 +60,62 @@ type Kernel struct {
 	// in-flight action does not block agent registration / lookup.
 	actionMu      sync.RWMutex
 	actionHandler ActionHandler
+
+	// Optional pluggable hooks consumed by RegisterFromPack when a Pack
+	// declares a `schedules:` (DD-007) block. The host owns the
+	// scheduler implementation; the kernel just forwards specs. When
+	// unset the kernel logs a warning via the host-installed logger and
+	// continues — schedules are best-effort and must never block agent
+	// registration.
+	hooksMu      sync.RWMutex
+	scheduleHook ScheduleHook
+	logger       func(format string, args ...any)
+}
+
+// ScheduleHook is the per-Pack scheduler-registration callback the
+// host wires when it owns a running scheduler. RegisterFromPack
+// invokes this once per manifest.schedules[] entry. The Fire callback
+// runs the Agent's Handler with no caller-supplied user message —
+// schedules are autonomous triggers, not chat turns.
+type ScheduleHook func(jobID string, decl ScheduleSpec, fire func(ctx context.Context)) error
+
+// ScheduleSpec mirrors the wire-level fields the kernel needs to hand
+// over without forcing pkg/kernel to import pkg/scheduler (which would
+// pull in bbolt + the time wheel). The host adapter translates this
+// into scheduler.Job at registration time.
+type ScheduleSpec struct {
+	Cron           string
+	Once           string
+	TZ             string
+	IdempotencyKey string
+	MissedFire     string
+	Payload        map[string]any
+}
+
+// SetScheduleHook wires the per-Pack scheduler-registration callback.
+func (k *Kernel) SetScheduleHook(h ScheduleHook) {
+	k.hooksMu.Lock()
+	defer k.hooksMu.Unlock()
+	k.scheduleHook = h
+}
+
+// SetLogger installs a host-side logger for kernel-level warnings
+// (best-effort schedule wiring failures). Defaults to a silent
+// logger.
+func (k *Kernel) SetLogger(logger func(format string, args ...any)) {
+	k.hooksMu.Lock()
+	defer k.hooksMu.Unlock()
+	k.logger = logger
+}
+
+func (k *Kernel) getHooks() (ScheduleHook, func(format string, args ...any)) {
+	k.hooksMu.RLock()
+	defer k.hooksMu.RUnlock()
+	logger := k.logger
+	if logger == nil {
+		logger = func(string, ...any) {}
+	}
+	return k.scheduleHook, logger
 }
 
 // New returns an empty kernel.
