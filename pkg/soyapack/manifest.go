@@ -64,10 +64,11 @@ type Manifest struct {
 	Outputs   []any          `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 	Prompt    *Prompt        `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Artifacts []ArtifactDecl `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	Schedules []ScheduleDecl `yaml:"schedules,omitempty" json:"schedules,omitempty"`
-	Channels  []ChannelDecl  `yaml:"channels,omitempty" json:"channels,omitempty"`
-	Actions   []ActionDecl   `yaml:"actions,omitempty" json:"actions,omitempty"`
-	State     *StateDecl     `yaml:"state,omitempty" json:"state,omitempty"`
+	Schedules  []ScheduleDecl     `yaml:"schedules,omitempty" json:"schedules,omitempty"`
+	Channels   []ChannelDecl      `yaml:"channels,omitempty" json:"channels,omitempty"`
+	Actions    []ActionDecl       `yaml:"actions,omitempty" json:"actions,omitempty"`
+	State      *StateDecl         `yaml:"state,omitempty" json:"state,omitempty"`
+	StorageNAS []StorageNASDecl   `yaml:"storage_nas,omitempty" json:"storage_nas,omitempty"`
 	Sandbox   *SandboxDecl   `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 	Uses      []string       `yaml:"uses,omitempty" json:"uses,omitempty"`
 
@@ -279,11 +280,44 @@ type MemoryMount struct {
 	Access string `yaml:"access" json:"access"` // ro / rw
 }
 
-// NASMount declares a NAS storage target (DD-011).
+// NASMount declares a NAS storage target referenced by a capability
+// allowlist. Kept for the legacy `sandbox.capabilities.storage_nas`
+// surface; new code should prefer the top-level `storage_nas:` block
+// (StorageNASDecl) which carries the protocol-specific connection
+// details Comet needs to actually write the artifact.
 type NASMount struct {
 	Kind   string `yaml:"kind" json:"kind"` // smb / nfs / webdav / s3
 	Mount  string `yaml:"mount" json:"mount"`
 	Access string `yaml:"access" json:"access"` // ro / rw
+}
+
+// StorageNASDecl is one entry under the top-level `storage_nas:` block
+// (DD-011 SilentCut). Where NASMount only names a capability slot,
+// StorageNASDecl carries the full connection recipe the kernel hands
+// to Comet's NAS connector layer:
+//
+//   - Protocol — one of "smb", "nfs", "webdav", "s3"; the four
+//     pkg/connectors/nas drivers ride here.
+//   - HostRef  — the network address. Must be of the form ${ENV_NAME}
+//     so the operator's deployment env supplies it; inline hosts are
+//     allowed (no secret leak risk) but the SilentCut alpha
+//     recommendation is to keep them in env so the manifest is
+//     deploy-environment-agnostic.
+//   - Share    — protocol-specific path inside HostRef (SMB share
+//     name, NFS export path, WebDAV root, S3 bucket).
+//   - Access   — "ro" / "rw".
+//   - Secrets  — env-var refs ({"username_ref": "${SOYA_NAS_USER}", ...}).
+//     The same ${ENV_NAME} rule that governs channels.secrets[*]
+//     governs these.
+//   - ID       — optional stable identifier so multiple NAS targets
+//     can coexist; defaults to "primary" when omitted.
+type StorageNASDecl struct {
+	ID       string            `yaml:"id,omitempty" json:"id,omitempty"`
+	Protocol string            `yaml:"protocol" json:"protocol"`
+	HostRef  string            `yaml:"host_ref" json:"host_ref"`
+	Share    string            `yaml:"share" json:"share"`
+	Access   string            `yaml:"access,omitempty" json:"access,omitempty"`
+	Secrets  map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // Resources caps the compute budget per Pack invocation.
@@ -348,6 +382,7 @@ var knownTopLevelFields = map[string]struct{}{
 	"channels":     {},
 	"actions":      {},
 	"state":        {},
+	"storage_nas":  {},
 	"sandbox":      {},
 	"uses":         {},
 	"capabilities": {},

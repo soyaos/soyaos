@@ -178,6 +178,39 @@ func Validate(m *Manifest) error {
 		}
 	}
 
+	// --- storage_nas --------------------------------------------------------
+	//
+	// Top-level storage_nas[] is the SilentCut (DD-011) declaration that
+	// the Agent will write artifacts (typically MP4) to a NAS. The kernel
+	// hands the validated declaration to a NASHook on RegisterFromPack so
+	// the host adapter can resolve env-var-ref creds and produce a
+	// pkg/connectors/nas.NAS handle.
+	for i, s := range m.StorageNAS {
+		switch s.Protocol {
+		case "smb", "nfs", "webdav", "s3":
+		default:
+			return wrap("storage_nas[%d].protocol must be one of smb/nfs/webdav/s3, got %q", i, s.Protocol)
+		}
+		if s.HostRef == "" {
+			return wrap("storage_nas[%d].host_ref is required", i)
+		}
+		if s.Share == "" {
+			return wrap("storage_nas[%d].share is required", i)
+		}
+		if s.Access != "" {
+			switch s.Access {
+			case "ro", "rw":
+			default:
+				return wrap("storage_nas[%d].access must be ro/rw, got %q", i, s.Access)
+			}
+		}
+		for k, v := range s.Secrets {
+			if !reAPIKeyRef.MatchString(v) {
+				return wrap("storage_nas[%d].secrets[%q] must be of the form ${ENV_NAME} (got %q)", i, k, v)
+			}
+		}
+	}
+
 	// --- state --------------------------------------------------------------
 	if m.State != nil {
 		switch m.State.Scope {

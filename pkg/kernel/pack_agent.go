@@ -135,6 +135,14 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 		return err
 	}
 
+	// --- best-effort: wire storage_nas[] (DD-011 SilentCut — APP-554) ----
+	//
+	// Same posture as channels[] / schedules[]: an unwired NASHook is a
+	// best-effort skip, not a register-time fatal. The Agent must remain
+	// chat-reachable even when its NAS target is unresolved (e.g. the
+	// operator hasn't set ${SOYA_NAS_HOST} yet).
+	k.resolveNASTargets(m, slug)
+
 	// --- best-effort: wire channels[] + schedules[] ----------------------
 	//
 	// Both are intentionally non-fatal: an Agent must remain reachable
@@ -358,6 +366,57 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 			MaxTokens:   req.MaxTokens,
 			Stream:      true,
 		}, out)
+	}
+}
+
+// resolveNASTargets walks manifest.storage_nas[] and asks the wired
+// NASHook to produce a NASTarget per entry. Failures are logged and
+// skipped — never fatal — so a missing env var (or unwired hook)
+// cannot block agent registration. (DD-011 SilentCut — APP-554)
+func (k *Kernel) resolveNASTargets(m *soyapack.Manifest, slug string) {
+	if len(m.StorageNAS) == 0 {
+		return
+	}
+	hook := k.getNASHook()
+	_, _, logger := k.getHooks()
+	if hook == nil {
+		logger("kernel: pack %q declares %d storage_nas target(s) but no NASHook wired — NAS writes disabled",
+			m.Name, len(m.StorageNAS))
+		return
+	}
+	for i, decl := range m.StorageNAS {
+		id := decl.ID
+		if id == "" {
+			id = "primary"
+		}
+		target, err := hook(NASBindingSpec{
+			ID:       id,
+			Protocol: decl.Protocol,
+			HostRef:  decl.HostRef,
+			Share:    decl.Share,
+			Access:   decl.Access,
+			Secrets:  decl.Secrets,
+		})
+		if err != nil {
+			logger("kernel: pack %q storage_nas[%d] (id=%s protocol=%s): %v — skipping",
+				m.Name, i, id, decl.Protocol, err)
+			continue
+		}
+		if target.Handle == nil {
+			logger("kernel: pack %q storage_nas[%d] (id=%s) hook returned nil handle — skipping",
+				m.Name, i, id)
+			continue
+		}
+		if target.ID == "" {
+			target.ID = id
+		}
+		if target.Protocol == "" {
+			target.Protocol = decl.Protocol
+		}
+		if target.BasePath == "" {
+			target.BasePath = decl.Share
+		}
+		k.storeNASTarget(slug, target)
 	}
 }
 

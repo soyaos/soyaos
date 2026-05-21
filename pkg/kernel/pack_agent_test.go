@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -748,6 +749,136 @@ func TestRegisterFromPack_Actions_UnknownActionStill404(t *testing.T) {
 	_, err := k.InvokeAction(context.Background(), auth.Identity{}, "act-one", "second", "row-1", nil)
 	if !errors.Is(err, ErrUnknownAction) {
 		t.Errorf("expected ErrUnknownAction, got %v", err)
+	}
+}
+
+// --- manifest.storage_nas[] wiring (DD-011 SilentCut — APP-554) -------------
+
+// fakeNASHandle satisfies kernel.NASWriter for storage_nas wiring tests.
+type fakeNASHandle struct {
+	writes []string
+	closed bool
+}
+
+func (f *fakeNASHandle) Write(_ context.Context, path string, _ io.Reader) (int64, error) {
+	f.writes = append(f.writes, path)
+	return 0, nil
+}
+func (f *fakeNASHandle) Close() error { f.closed = true; return nil }
+
+func TestRegisterFromPack_StorageNAS_ResolvedByHook(t *testing.T) {
+	m := minimalAgentManifest("silent-cut", "silent-cut")
+	m.StorageNAS = []soyapack.StorageNASDecl{{
+		ID:       "primary",
+		Protocol: "webdav",
+		HostRef:  "${SOYA_NAS_HOST}",
+		Share:    "/videos",
+		Access:   "rw",
+		Secrets: map[string]string{
+			"username_ref": "${SOYA_NAS_USER}",
+			"password_ref": "${SOYA_NAS_PASS}",
+		},
+	}}
+	dir := writePack(t, m, "system")
+
+	var seen []NASBindingSpec
+	fakeHandle := &fakeNASHandle{}
+	k := New()
+	k.SetNASHook(func(spec NASBindingSpec) (NASTarget, error) {
+		seen = append(seen, spec)
+		return NASTarget{ID: spec.ID, Protocol: spec.Protocol, BasePath: spec.Share, Handle: fakeHandle}, nil
+	})
+
+	fake := &fakeProvider{}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("NASHook called %d times, want 1", len(seen))
+	}
+	if seen[0].HostRef != "${SOYA_NAS_HOST}" {
+		t.Errorf("HostRef = %q, want raw env ref (host resolution is the hook's job)", seen[0].HostRef)
+	}
+	if seen[0].Secrets["username_ref"] != "${SOYA_NAS_USER}" {
+		t.Errorf("username_ref not threaded through: %+v", seen[0].Secrets)
+	}
+
+	tgt, ok := k.LookupNAS("silent-cut", "primary")
+	if !ok {
+		t.Fatal("LookupNAS(silent-cut, primary) not found")
+	}
+	if tgt.Protocol != "webdav" || tgt.BasePath != "/videos" {
+		t.Errorf("NASTarget = %+v", tgt)
+	}
+	if tgt.Handle != fakeHandle {
+		t.Error("Handle pointer not stored")
+	}
+}
+
+func TestRegisterFromPack_StorageNAS_WithoutHook_LogsAndContinues(t *testing.T) {
+	m := minimalAgentManifest("nas-orphan", "nas-orphan")
+	m.StorageNAS = []soyapack.StorageNASDecl{{Protocol: "webdav", HostRef: "x", Share: "/v"}}
+	dir := writePack(t, m, "system")
+
+	var warnings []string
+	k := New()
+	k.SetLogger(func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+	fake := &fakeProvider{}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if _, ok := k.Lookup("soya:nas-orphan"); !ok {
+		t.Fatal("agent must still register without a NASHook")
+	}
+	if _, ok := k.LookupNAS("nas-orphan", "primary"); ok {
+		t.Fatal("unwired hook should not produce a target")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "no NASHook wired") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no NASHook wired' warning, got %v", warnings)
+	}
+}
+
+func TestRegisterFromPack_StorageNAS_HookErrorSkipped(t *testing.T) {
+	m := minimalAgentManifest("nas-broken", "nas-broken")
+	m.StorageNAS = []soyapack.StorageNASDecl{{Protocol: "webdav", HostRef: "${MISSING}", Share: "/v"}}
+	dir := writePack(t, m, "system")
+
+	var warnings []string
+	k := New()
+	k.SetLogger(func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+	k.SetNASHook(func(_ NASBindingSpec) (NASTarget, error) {
+		return NASTarget{}, errors.New("env var SOYA_NAS_HOST not set")
+	})
+	fake := &fakeProvider{}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	if _, ok := k.Lookup("soya:nas-broken"); !ok {
+		t.Fatal("agent must still register when NAS hook errors")
+	}
+	if _, ok := k.LookupNAS("nas-broken", "primary"); ok {
+		t.Fatal("errored hook must not produce a stored target")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "env var SOYA_NAS_HOST not set") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error to appear in warning, got %v", warnings)
 	}
 }
 

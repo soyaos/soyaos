@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -68,14 +69,23 @@ type Kernel struct {
 	packActions   map[string]map[string]ActionHandler
 
 	// Optional pluggable hooks consumed by RegisterFromPack when a Pack
-	// declares `schedules:` (DD-007) or `channels:` (DD-006) blocks.
+	// declares `schedules:` (DD-007), `channels:` (DD-006) or
+	// `storage_nas:` (DD-011 SilentCut — APP-554) blocks.
+	//
 	// Each hook is independent: a host may wire only the scheduler, only
-	// the channel publisher, both, or neither. When unset the kernel
-	// logs a warning via Warnf and continues — schedules and channels
-	// are best-effort; an unwired hook must never block agent registration.
+	// the channel publisher, both, or none of the above. When a hook is
+	// unset the kernel logs a warning via Warnf and continues —
+	// schedules / channels / storage_nas are best-effort; an unwired
+	// hook must never block agent registration.
+	//
+	// `nasTargets` caches the resolved NAS targets per agent slug so the
+	// agent's Handler (or its actions) can write artifacts home without
+	// re-resolving on every invocation.
 	hooksMu      sync.RWMutex
 	scheduleHook ScheduleHook
 	channelHook  ChannelHook
+	nasHook      NASHook
+	nasTargets   map[string]map[string]NASTarget
 	logger       func(format string, args ...any)
 }
 
@@ -123,6 +133,60 @@ type ChannelPublisher interface {
 	Send(ctx context.Context, title, body string) error
 }
 
+// NASHook is the per-Pack NAS-target resolver. When a Pack declares
+// `storage_nas:` (DD-011 SilentCut — APP-554), the kernel asks the
+// host to produce one NASTarget per entry — typically by resolving
+// the env-var-ref host + secrets, opening a pkg/connectors/nas.NAS
+// handle, and returning both. The kernel never reads env vars
+// directly; resolution stays in the host so test harnesses can
+// inject fake handles.
+type NASHook func(decl NASBindingSpec) (NASTarget, error)
+
+// NASBindingSpec is the wire shape of one manifest.storage_nas[]
+// entry handed to a NASHook.
+type NASBindingSpec struct {
+	// ID is the per-Pack target identifier (defaults to "primary").
+	ID string
+	// Protocol is one of smb/nfs/webdav/s3.
+	Protocol string
+	// HostRef is the env-var ref ("${SOYA_NAS_HOST}") or literal
+	// host; the host adapter is responsible for resolving env refs.
+	HostRef string
+	// Share is protocol-specific (SMB share, NFS export, WebDAV
+	// root, S3 bucket).
+	Share string
+	// Access is "ro" / "rw".
+	Access string
+	// Secrets carries the env-var refs the host adapter dereferences.
+	Secrets map[string]string
+}
+
+// NASTarget is a resolved NAS handle plus the path layout the Agent
+// should write under. Comet calls Handle.Write(ctx, BasePath+"/...")
+// when emitting artifacts.
+//
+// Handle is io.Closer-shaped via its embedded pkg/connectors/nas.NAS
+// — see that package for the full surface. We hold the interface
+// directly here so kernel callers don't need to import the connector
+// types just to inspect their target.
+type NASTarget struct {
+	ID       string
+	Protocol string
+	BasePath string // protocol-specific, typically the resolved Share path
+	Handle   NASWriter
+}
+
+// NASWriter is the minimal write contract kernel callers care about.
+// pkg/connectors/nas.NAS satisfies this directly — defining the
+// interface locally avoids a kernel → connectors import cycle.
+type NASWriter interface {
+	// Write copies r to path on the remote share and returns the
+	// number of bytes delivered.
+	Write(ctx context.Context, path string, r io.Reader) (int64, error)
+	// Close releases the underlying connection.
+	Close() error
+}
+
 // SetScheduleHook wires the per-Pack scheduler-registration callback.
 func (k *Kernel) SetScheduleHook(h ScheduleHook) {
 	k.hooksMu.Lock()
@@ -135,6 +199,60 @@ func (k *Kernel) SetChannelHook(h ChannelHook) {
 	k.hooksMu.Lock()
 	defer k.hooksMu.Unlock()
 	k.channelHook = h
+}
+
+// SetNASHook wires the per-Pack NAS target resolver (DD-011 SilentCut).
+// When unset, manifest.storage_nas[] entries are best-effort skipped
+// with a warning — the Agent still registers and remains chat-reachable.
+func (k *Kernel) SetNASHook(h NASHook) {
+	k.hooksMu.Lock()
+	defer k.hooksMu.Unlock()
+	k.nasHook = h
+}
+
+// LookupNAS returns the resolved NASTarget for the named agent slug
+// and target id ("primary" when the manifest's storage_nas[*].id was
+// omitted). Returns (zero, false) when no target was resolved — either
+// because the Pack declared no storage_nas[], or because the NASHook
+// was unset / errored at registration time.
+//
+// Agent action handlers call this when they want to write a final
+// artifact (SilentCut's MP4) home. Calling LookupNAS from inside the
+// handler keeps the lifecycle simple: the kernel owns the handle, the
+// handler borrows it.
+func (k *Kernel) LookupNAS(agentSlug, targetID string) (NASTarget, bool) {
+	k.hooksMu.RLock()
+	defer k.hooksMu.RUnlock()
+	if k.nasTargets == nil {
+		return NASTarget{}, false
+	}
+	bySlug, ok := k.nasTargets[agentSlug]
+	if !ok {
+		return NASTarget{}, false
+	}
+	if targetID == "" {
+		targetID = "primary"
+	}
+	t, ok := bySlug[targetID]
+	return t, ok
+}
+
+// storeNASTarget records the resolved NASTarget under the agent slug.
+// Called from pack_agent.go after RegisterFromPack resolves
+// manifest.storage_nas[] via the configured hook.
+func (k *Kernel) storeNASTarget(agentSlug string, t NASTarget) {
+	k.hooksMu.Lock()
+	defer k.hooksMu.Unlock()
+	if k.nasTargets == nil {
+		k.nasTargets = map[string]map[string]NASTarget{}
+	}
+	if k.nasTargets[agentSlug] == nil {
+		k.nasTargets[agentSlug] = map[string]NASTarget{}
+	}
+	if t.ID == "" {
+		t.ID = "primary"
+	}
+	k.nasTargets[agentSlug][t.ID] = t
 }
 
 // SetLogger installs a host-side logger for kernel-level warnings
@@ -154,6 +272,14 @@ func (k *Kernel) getHooks() (ScheduleHook, ChannelHook, func(format string, args
 		logger = func(string, ...any) {}
 	}
 	return k.scheduleHook, k.channelHook, logger
+}
+
+// getNASHook is split out from getHooks because nasHook arrived later
+// (APP-554) and only one caller — registerFromPack — needs it.
+func (k *Kernel) getNASHook() NASHook {
+	k.hooksMu.RLock()
+	defer k.hooksMu.RUnlock()
+	return k.nasHook
 }
 
 // New returns an empty kernel.
