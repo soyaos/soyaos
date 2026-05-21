@@ -1,7 +1,7 @@
 # Owner: release-eng
 # Purpose: Build multi-arch container images and publish to ghcr.io/soyaos
 # Trigger: push of v* tags, or manual workflow_dispatch
-# Notes: Requires GITHUB_TOKEN (auto). Dockerfile at repo root is TODO for alpha.
+# Notes: Requires GITHUB_TOKEN (auto). Uses the repo-root multi-stage Dockerfile.
 
 name: image
 
@@ -49,10 +49,8 @@ jobs:
           fi
           echo "tags=${tags}" >> "${GITHUB_OUTPUT}"
 
-      # TODO: requires repo-root Dockerfile (alpha defers this).
       - name: Build and push
         uses: docker/build-push-action@v6
-        continue-on-error: true
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -60,3 +58,6 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           provenance: true
           sbom: false
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GITSHA=${{ github.sha }}
