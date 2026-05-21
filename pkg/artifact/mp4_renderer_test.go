@@ -3,9 +3,12 @@ package artifact
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -140,6 +143,181 @@ func TestServeStreamingArtifact_BadRange(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
 		t.Errorf("status=%d, want 416", resp.StatusCode)
+	}
+}
+
+// --- RemotionSpec wiring (APP-554 / DD-011 SilentCut) -----------------------
+
+// mockRunner records argv + stdin and emits a configurable byte body
+// to the chunks channel, so RenderStream's Remotion path can be tested
+// without spawning subprocesses.
+type mockRunner struct {
+	gotArgv  []string
+	gotStdin []byte
+	body     []byte
+	chunks   int // how many chunks to split body into (≥1)
+	err      error
+}
+
+func (m *mockRunner) Run(ctx context.Context, argv []string, stdin []byte, out chan<- []byte, _ int64) error {
+	m.gotArgv = argv
+	m.gotStdin = append([]byte(nil), stdin...)
+	if m.err != nil {
+		return m.err
+	}
+	if m.chunks <= 0 {
+		m.chunks = 1
+	}
+	chunkSize := (len(m.body) + m.chunks - 1) / m.chunks
+	if chunkSize == 0 {
+		chunkSize = 1
+	}
+	for i := 0; i < len(m.body); i += chunkSize {
+		end := i + chunkSize
+		if end > len(m.body) {
+			end = len(m.body)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- append([]byte(nil), m.body[i:end]...):
+		}
+	}
+	return nil
+}
+
+func TestMP4Renderer_RenderStream_SpawnRemotion(t *testing.T) {
+	// Build a 256-byte fake MP4 body — enough to split into 4 chunks.
+	fakeBody := bytes.Repeat([]byte("0123456789ABCDEF"), 16)
+	if !bytes.Equal(fakeBody[:4], []byte("0123")) {
+		t.Fatal("test fixture wrong")
+	}
+	runner := &mockRunner{body: fakeBody, chunks: 4}
+	r := MP4Renderer{Schema: "silentcut.v1", Runner: runner}
+
+	chunks := make(chan []byte, 16)
+	spec := &RemotionSpec{
+		Argv:  []string{"npx", "remotion", "render", "/workdir/src/index.ts", "Clip", "/workdir/out/clip.mp4"},
+		Stdin: []byte(`{"hello":"world"}`),
+	}
+	a, err := r.RenderStream(context.Background(), spec, chunks)
+	if err != nil {
+		t.Fatalf("RenderStream: %v", err)
+	}
+	if !a.Streaming || a.Size != -1 {
+		t.Errorf("Artifact = %+v, want Streaming=true Size=-1", a)
+	}
+	var got [][]byte
+	for c := range chunks {
+		got = append(got, c)
+	}
+	if len(got) < 1 {
+		t.Fatalf("got %d chunks, want >= 1", len(got))
+	}
+	var concat bytes.Buffer
+	for _, c := range got {
+		concat.Write(c)
+	}
+	if !bytes.Equal(concat.Bytes(), fakeBody) {
+		t.Errorf("concatenated chunks != fake body (got %d bytes, want %d)", concat.Len(), len(fakeBody))
+	}
+	// Argv + stdin must have been threaded through verbatim.
+	if len(runner.gotArgv) != len(spec.Argv) {
+		t.Fatalf("argv len = %d, want %d", len(runner.gotArgv), len(spec.Argv))
+	}
+	for i := range runner.gotArgv {
+		if runner.gotArgv[i] != spec.Argv[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, runner.gotArgv[i], spec.Argv[i])
+		}
+	}
+	if !bytes.Equal(runner.gotStdin, spec.Stdin) {
+		t.Errorf("stdin = %q, want %q", runner.gotStdin, spec.Stdin)
+	}
+}
+
+func TestMP4Renderer_RenderStream_RemotionSpecFromMap(t *testing.T) {
+	// Snapshots that arrived as map[string]any (from JSON) must still be
+	// recognised when they embed a remotion key.
+	runner := &mockRunner{body: []byte("ftyp-fake-body"), chunks: 2}
+	r := MP4Renderer{Runner: runner}
+	chunks := make(chan []byte, 8)
+
+	snapshot := map[string]any{
+		"remotion": RemotionSpec{Argv: []string{"npx", "remotion", "render", "/a/b.ts", "C", "/out.mp4"}},
+	}
+	_, err := r.RenderStream(context.Background(), snapshot, chunks)
+	if err != nil {
+		t.Fatalf("RenderStream: %v", err)
+	}
+	if len(runner.gotArgv) == 0 {
+		t.Fatal("mockRunner not invoked; map shape not recognised")
+	}
+}
+
+func TestMP4Renderer_RenderStream_RemotionFailure(t *testing.T) {
+	runner := &mockRunner{err: errors.New("exit status 1: chromium crashed")}
+	r := MP4Renderer{Runner: runner}
+	chunks := make(chan []byte, 8)
+	spec := &RemotionSpec{Argv: []string{"npx", "remotion", "render", "/a/b.ts", "C", "/o.mp4"}}
+	_, err := r.RenderStream(context.Background(), spec, chunks)
+	if err == nil {
+		t.Fatal("expected RenderStream to surface runner error")
+	}
+	if !strings.Contains(err.Error(), "chromium crashed") {
+		t.Errorf("error should include subprocess detail, got %v", err)
+	}
+}
+
+// TestMP4Renderer_RenderStream_RealSubprocess exercises the actual
+// execCmdRunner against /bin/sh -c 'printf ...' — no Remotion needed.
+// The point is to assert that argv → exec.CommandContext → stdout pipe
+// → chunks really works end-to-end. Skipped on Windows where /bin/sh
+// is not a thing.
+func TestMP4Renderer_RenderStream_RealSubprocess(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+	chunks := make(chan []byte, 32)
+	r := MP4Renderer{Schema: "silentcut.v1"} // Runner=nil → execCmdRunner
+	spec := &RemotionSpec{
+		Argv: []string{"/bin/sh", "-c", "printf 'ftypisomXYZ'; sleep 0; printf 'mdat-payload-bytes'"},
+	}
+	a, err := r.RenderStream(context.Background(), spec, chunks)
+	if err != nil {
+		t.Fatalf("RenderStream: %v", err)
+	}
+	if !a.Streaming {
+		t.Error("Streaming must be true")
+	}
+	var concat bytes.Buffer
+	for c := range chunks {
+		concat.Write(c)
+	}
+	body := concat.String()
+	if !strings.Contains(body, "ftypisomXYZ") || !strings.Contains(body, "mdat-payload-bytes") {
+		t.Errorf("stdout did not propagate to chunks; got %q", body)
+	}
+}
+
+func TestMP4Renderer_RenderStream_PlaceholderWhenNoSpec(t *testing.T) {
+	// Sanity: passing a non-spec snapshot still takes the placeholder
+	// path and produces ≥3 chunks of valid-looking MP4 bytes — this is
+	// the contract the http_streaming.go tests rely on.
+	chunks := make(chan []byte, 16)
+	r := MP4Renderer{}
+	a, err := r.RenderStream(context.Background(), map[string]any{"unrelated": true}, chunks)
+	if err != nil {
+		t.Fatalf("RenderStream: %v", err)
+	}
+	var got [][]byte
+	for c := range chunks {
+		got = append(got, c)
+	}
+	if len(got) < 3 {
+		t.Errorf("got %d chunks, want >= 3 (placeholder path)", len(got))
+	}
+	if !a.Streaming {
+		t.Error("Streaming should be true on placeholder path")
 	}
 }
 
