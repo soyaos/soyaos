@@ -11,8 +11,8 @@
 //	soyaos agent create <name>    scaffold a SoyaPack v0 Agent
 //	soyaos agent list             list registered Agents (talks to a running soyaos)
 //	soyaos agent run <slug> "..." invoke an Agent once (talks to a running soyaos)
-//	soyaos agent build [<path>]   build a SoyaPack v0 archive (planned, stub in alpha)
-//	soyaos agent deploy <pack>    register a pack with a running soyaos (planned, stub in alpha)
+//	soyaos agent build [<path>]   build a canonical SoyaPack v0 .spk archive
+//	soyaos agent deploy <pack>    register a built .spk with a running soyaos
 //	soyaos pack validate <path>   parse + validate a SoyaPack v0 manifest
 //
 // Each subcommand has its own flag set parsed with stdlib `flag`.
@@ -21,11 +21,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/signal"
@@ -89,8 +92,9 @@ Usage:
   soyaos agent list [--rpc URL]   list Agents registered with a running soyaos
   soyaos agent run <slug> "<prompt>" [--listen URL]
                                   invoke an Agent and print its response
-  soyaos agent build [<path>]     build a SoyaPack v0 archive (alpha: stub)
-  soyaos agent deploy <pack>      register a pack with a running soyaos (alpha: stub)
+  soyaos agent build [<path>]     build a canonical SoyaPack v0 .spk archive
+  soyaos agent deploy <pack> [--rpc URL]
+                                  upload a built .spk to a running soyaos
   soyaos pack validate <path>     parse + validate a SoyaPack v0 manifest
                                   (<path> is a directory containing soyapack.yaml
                                   or a path to a .yaml file)
@@ -165,6 +169,18 @@ func cmdStart(args []string) error {
 		k.Register(kernel.NewLLMAgent("llm", llmCfg))
 	}
 
+	// Re-load every Pack previously deployed under <data-dir>/packs/* so
+	// `soyaos start` is idempotent: a Pack that was deployed via POST
+	// /control/v0/packs in a prior process is still wired up after a
+	// restart. Failures are warned but never fatal — one corrupt Pack
+	// must not prevent the binary from booting.
+	if loaded, warnings := reloadDeployedPacks(*dataDir, k); loaded > 0 || len(warnings) > 0 {
+		fmt.Fprintf(os.Stdout, "Re-loaded %d pack(s) from %s\n", loaded, filepath.Join(*dataDir, "packs"))
+		for _, w := range warnings {
+			fmt.Fprintln(os.Stderr, "  warn:", w)
+		}
+	}
+
 	// --- data plane: OpenAI-Compat gateway on :7474 ---
 	gateway := openaicompat.NewServer(k, keys)
 	dataMux := http.NewServeMux()
@@ -194,7 +210,7 @@ func cmdStart(args []string) error {
 	// --- control plane: RPC on :7475 (loopback-only) ---
 	controlSrv := &http.Server{
 		Addr:              *rpc,
-		Handler:           control.NewServer(k).Handler(),
+		Handler:           control.NewServer(k).WithDataDir(*dataDir).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -469,8 +485,156 @@ func cmdAgentBuild(args []string) error {
 	return nil
 }
 
+// cmdAgentDeploy uploads a built .spk to a running soyaos via the control
+// RPC pack-deploy endpoint. The handshake mirrors what `agent build` writes
+// to disk: the .spk is the canonical archive, and the .sha256 sidecar is
+// authoritative when present (we recompute the digest in any case and pass
+// it in the X-Spk-Sha256 header so the server can detect transport
+// tampering).
 func cmdAgentDeploy(args []string) error {
-	return errors.New("agent deploy: not implemented in v0.1.0-alpha.0 — see roadmap S2-A2 (pkg/soyapack)")
+	fs := flag.NewFlagSet("agent deploy", flag.ContinueOnError)
+	rpc := fs.String("rpc", "http://"+control.DefaultListenAddr, "control RPC base URL")
+	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return errors.New("agent deploy: expected <pack.spk>")
+	}
+	spkPath := rest[0]
+
+	info, err := os.Stat(spkPath)
+	if err != nil {
+		return fmt.Errorf("agent deploy: stat %s: %w", spkPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("agent deploy: %s is a directory, expected a .spk file", spkPath)
+	}
+
+	digest, err := sha256OfFile(spkPath)
+	if err != nil {
+		return fmt.Errorf("agent deploy: hash %s: %w", spkPath, err)
+	}
+
+	// Build the multipart body in a pipe so we don't hold the whole .spk
+	// in RAM. For a 32 MiB cap that's not a real constraint, but matching
+	// the server's streaming shape keeps memory profiles flat for any
+	// follow-up cap raise.
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		defer pw.Close()
+		part, err := mw.CreateFormFile("pack", filepath.Base(spkPath))
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		f, err := os.Open(spkPath)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		defer f.Close()
+		if _, err := io.Copy(part, f); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if err := mw.Close(); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, *rpc+"/control/v0/packs", pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-Spk-Sha256", digest)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("contact control RPC at %s: %w (is soyaos running?)", *rpc, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("control RPC returned %d: %s", resp.StatusCode, raw)
+	}
+
+	var out struct {
+		Slug           string `json:"slug"`
+		VirtualModelID string `json:"virtual_model_id"`
+		Files          int    `json:"files"`
+		Size           int64  `json:"size"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return fmt.Errorf("agent deploy: decode response: %w (body=%s)", err, raw)
+	}
+	fmt.Printf("deployed %s · ready (files=%d, size=%d)\n", out.VirtualModelID, out.Files, out.Size)
+	return nil
+}
+
+// sha256OfFile streams path through sha256 and returns the lowercase hex
+// digest. Mirrors the format `agent build` writes into the .spk.sha256
+// sidecar so caller round-trips byte-identically.
+func sha256OfFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// reloadDeployedPacks walks <dataDir>/packs/*/soyapack.yaml and registers
+// each Pack against k. Returns the count of successfully loaded Packs and
+// a list of human-readable warnings for the ones that failed.
+//
+// The whole step is best-effort: a partially-broken Pack tree must NOT
+// prevent `soyaos start` from booting (the operator can fix or remove the
+// offending dir and restart). We log warnings rather than returning an
+// error.
+func reloadDeployedPacks(dataDir string, k *kernel.Kernel) (loaded int, warnings []string) {
+	packsRoot := filepath.Join(dataDir, "packs")
+	entries, err := os.ReadDir(packsRoot)
+	if err != nil {
+		// Missing directory is normal on first boot.
+		if !errors.Is(err, os.ErrNotExist) {
+			warnings = append(warnings, fmt.Sprintf("read %s: %v", packsRoot, err))
+		}
+		return 0, warnings
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		packDir := filepath.Join(packsRoot, e.Name())
+		manifestPath := filepath.Join(packDir, "soyapack.yaml")
+		if _, statErr := os.Stat(manifestPath); statErr != nil {
+			warnings = append(warnings, fmt.Sprintf("skip %s: no soyapack.yaml", e.Name()))
+			continue
+		}
+		m, err := soyapack.LoadFromFile(manifestPath)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("skip %s: load: %v", e.Name(), err))
+			continue
+		}
+		if err := soyapack.Validate(m); err != nil {
+			warnings = append(warnings, fmt.Sprintf("skip %s: validate: %v", e.Name(), err))
+			continue
+		}
+		if err := k.RegisterFromPack(m, packDir); err != nil {
+			warnings = append(warnings, fmt.Sprintf("skip %s: register: %v", e.Name(), err))
+			continue
+		}
+		loaded++
+	}
+	return loaded, warnings
 }
 
 func isValidSlug(s string) bool {

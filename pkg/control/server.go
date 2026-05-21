@@ -20,21 +20,36 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	internalpack "github.com/soyaos/soyaos/internal/pack"
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
 	"github.com/soyaos/soyaos/pkg/llmcall"
 	"github.com/soyaos/soyaos/pkg/scope"
+	"github.com/soyaos/soyaos/pkg/soyapack"
 )
 
 // DefaultListenAddr matches specs/cli/v0.md — localhost loopback on 7475.
 const DefaultListenAddr = "127.0.0.1:7475"
+
+// MaxPackUploadBytes is the upper bound on a single POST /control/v0/packs
+// body (the multipart envelope including the file part). 32 MiB is the
+// alpha cap: Pack source trees are mostly prompt files + a few templates
+// so the typical .spk is well under 1 MiB; bigger sandbox images / model
+// weights belong on a separate channel. Larger archives are reserved for
+// v0.1.1 once we wire in chunked / resumable uploads.
+const MaxPackUploadBytes int64 = 32 << 20
 
 // Server is the control-plane HTTP handler.
 type Server struct {
@@ -44,6 +59,14 @@ type Server struct {
 	// reports an empty list (so the control API stays uniform across
 	// builds that have not wired metering yet).
 	Usage *scope.UsageAggregator
+	// DataDir is the on-disk root under which uploaded Packs are
+	// materialised (each Pack lands in <DataDir>/packs/<name>-<version>/).
+	// When empty, POST /control/v0/packs responds 503 — that endpoint is
+	// opt-in for callers that wire a persistent data directory. The Solo
+	// `soyaos start` path always sets it; raw `NewServer(k)` in unit
+	// tests deliberately does not, so the deploy surface stays disabled
+	// in tests that don't need it.
+	DataDir string
 }
 
 // NewServer wires a control server backed by the given kernel.
@@ -55,6 +78,14 @@ func (s *Server) WithUsage(u *scope.UsageAggregator) *Server {
 	return s
 }
 
+// WithDataDir enables the pack deploy endpoint by pointing it at an on-disk
+// root. Pack archives uploaded through POST /control/v0/packs are unpacked
+// under <dir>/packs/<name>-<version>/. Returns s for chaining.
+func (s *Server) WithDataDir(dir string) *Server {
+	s.DataDir = dir
+	return s
+}
+
 // Handler returns the http.Handler that owns /control/v0/* paths.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -62,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/control/v0/agents", s.handleAgents)
 	mux.HandleFunc("/control/v0/agents/", s.handleAgentChild)
 	mux.HandleFunc("/control/v0/usage", s.handleUsage)
+	mux.HandleFunc("/control/v0/packs", s.handleDeployPack)
 	return loopbackOnly(mux)
 }
 
@@ -210,6 +242,230 @@ func parseUsageWindow(s string) (time.Time, error) {
 	default:
 		return time.Time{}, fmt.Errorf("window must be one of today|7d|30d (got %q)", s)
 	}
+}
+
+// --- packs ------------------------------------------------------------------
+
+// deployPackResp is the wire shape of a successful POST /control/v0/packs.
+type deployPackResp struct {
+	Slug           string `json:"slug"`             // bare slug after "soya:"
+	VirtualModelID string `json:"virtual_model_id"` // canonical "soya:<slug>"
+	Files          int    `json:"files"`            // regular files written
+	Size           int64  `json:"size"`             // total bytes written under packDir
+}
+
+// handleDeployPack implements POST /control/v0/packs.
+//
+// Wire shape:
+//
+//	multipart/form-data
+//	  pack: <.spk file>                         (required, regular file part)
+//	  X-Spk-Sha256: <64-char lowercase hex>     (optional header)
+//
+// Flow:
+//  1. Reject when DataDir is unset (deploy disabled, 503).
+//  2. ParseMultipartForm with MaxPackUploadBytes cap. The form's "pack"
+//     part lands in a temp file on disk (default multipart behaviour for
+//     parts above the in-memory threshold).
+//  3. If the caller supplied X-Spk-Sha256, verify it matches the upload's
+//     sha256 (rejecting tampered transport with 400).
+//  4. Stream-extract the .spk into <DataDir>/packs/<name>-<version>/ via
+//     internal/pack.Extract, which enforces zip-slip + entry-size caps.
+//  5. Load + validate the unpacked soyapack.yaml and register the Agent
+//     against the kernel. A pre-existing Agent of the same slug is
+//     overwritten — kernel.Register is idempotent by ModelID().
+//
+// Errors are wire-shaped via writeError (envelope: {error: {type, code, message}}).
+func (s *Server) handleDeployPack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
+		return
+	}
+	if s.DataDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "pack_deploy_disabled",
+			"pack deploy disabled: server has no DataDir configured")
+		return
+	}
+
+	// Cap the *entire* request body (envelope + part) before any work. We
+	// also wrap r.Body with MaxBytesReader so a misbehaving client can't
+	// stream more bytes than the cap even past ParseMultipartForm's hint.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxPackUploadBytes)
+	if err := r.ParseMultipartForm(MaxPackUploadBytes); err != nil {
+		// MaxBytesReader returns "http: request body too large" when the
+		// cap is exceeded; map it to a 413 so callers can disambiguate
+		// "too big" from "wrong shape" without parsing the message.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) || strings.Contains(err.Error(), "too large") {
+			writeError(w, http.StatusRequestEntityTooLarge, "pack_too_large",
+				fmt.Sprintf("pack upload exceeds %d bytes", MaxPackUploadBytes))
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_multipart", err.Error())
+		return
+	}
+
+	file, hdr, err := r.FormFile("pack")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing_pack_field",
+			"multipart body must contain a 'pack' file part")
+		return
+	}
+	defer file.Close()
+	if hdr.Size > MaxPackUploadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "pack_too_large",
+			fmt.Sprintf("pack file declares %d bytes (max %d)", hdr.Size, MaxPackUploadBytes))
+		return
+	}
+
+	// Drain the part to a temp file so we can both (a) hash it without
+	// holding 32 MiB in RAM and (b) hand the bytes to Extract afterwards.
+	tmp, err := os.CreateTemp("", "soyaos-spk-*.spk")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "tempfile_error", err.Error())
+		return
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	h := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmp, h), file)
+	if cerr := tmp.Close(); err == nil && cerr != nil {
+		err = cerr
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "upload_read_error", err.Error())
+		return
+	}
+	if written == 0 {
+		writeError(w, http.StatusBadRequest, "empty_pack", "uploaded pack is empty")
+		return
+	}
+	digest := hex.EncodeToString(h.Sum(nil))
+
+	if expect := strings.TrimSpace(r.Header.Get("X-Spk-Sha256")); expect != "" {
+		if !strings.EqualFold(expect, digest) {
+			writeError(w, http.StatusBadRequest, "sha256_mismatch",
+				fmt.Sprintf("X-Spk-Sha256 mismatch: header=%s computed=%s", expect, digest))
+			return
+		}
+	}
+
+	// Stage 1: peek the manifest by extracting into a *staging* temp dir.
+	// We need name+version from the manifest to derive the canonical
+	// destination directory; doing this in a temp area first lets us
+	// reject malformed packs without leaving partial bytes under DataDir.
+	staging, err := os.MkdirTemp("", "soyaos-pack-staging-*")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "tempdir_error", err.Error())
+		return
+	}
+	defer os.RemoveAll(staging)
+
+	src, err := os.Open(tmpPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "tempfile_reopen", err.Error())
+		return
+	}
+	res, err := internalpack.Extract(src, staging)
+	_ = src.Close()
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "pack_extract_error"
+		switch {
+		case errors.Is(err, internalpack.ErrUnsafePath):
+			code = "pack_unsafe_path"
+		case errors.Is(err, internalpack.ErrUnsupportedEntry):
+			code = "pack_unsupported_entry"
+		case errors.Is(err, internalpack.ErrEntryTooLarge):
+			code = "pack_entry_too_large"
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeError(w, status, code, err.Error())
+		return
+	}
+
+	manifestPath := filepath.Join(staging, "soyapack.yaml")
+	m, err := soyapack.LoadFromFile(manifestPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "manifest_load_error", err.Error())
+		return
+	}
+	if err := soyapack.Validate(m); err != nil {
+		writeError(w, http.StatusBadRequest, "manifest_invalid", err.Error())
+		return
+	}
+
+	// Stage 2: promote staging → <DataDir>/packs/<name>-<version>/.
+	// We delete any pre-existing dir of the same identity so an upgrade
+	// is a clean swap rather than a half-merged sprawl.
+	finalDir := filepath.Join(s.DataDir, "packs", m.Name+"-"+m.Version)
+	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, "packs_dir_mkdir", err.Error())
+		return
+	}
+	if err := os.RemoveAll(finalDir); err != nil {
+		writeError(w, http.StatusInternalServerError, "stale_pack_remove", err.Error())
+		return
+	}
+	if err := os.Rename(staging, finalDir); err != nil {
+		// Rename across devices fails on some setups; fall back to a copy.
+		if copyErr := copyTree(staging, finalDir); copyErr != nil {
+			writeError(w, http.StatusInternalServerError, "promote_error",
+				fmt.Sprintf("rename=%v copy=%v", err, copyErr))
+			return
+		}
+	}
+
+	if err := s.Kernel.RegisterFromPack(m, finalDir); err != nil {
+		writeError(w, http.StatusBadRequest, "register_failed", err.Error())
+		return
+	}
+
+	slug := strings.TrimPrefix(m.Expose.VirtualModelID, "soya:")
+	writeJSON(w, http.StatusOK, deployPackResp{
+		Slug:           slug,
+		VirtualModelID: m.Expose.VirtualModelID,
+		Files:          res.Files,
+		Size:           res.Bytes,
+	})
+}
+
+// copyTree is the cross-device fallback for os.Rename when src and dst
+// live on different filesystems (e.g. /tmp on tmpfs, DataDir on a real
+// disk). Symlinks / specials cannot appear here — internal/pack.Extract
+// only emits regular files + their parent dirs.
+func copyTree(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, path)
+		if rerr != nil {
+			return rerr
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = out.Close()
+			return err
+		}
+		return out.Close()
+	})
 }
 
 // --- healthz ----------------------------------------------------------------
