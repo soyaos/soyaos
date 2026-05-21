@@ -6,13 +6,14 @@
 //
 // CLI surface is locked by soyaos/specs (cli.v0):
 //
-//   soyaos start                  boot Solo: all-in-one, OpenAI-Compat on :7474, control RPC on :7475
-//   soyaos version                print build identification
-//   soyaos agent create <name>    scaffold a SoyaPack v0 Agent
-//   soyaos agent list             list registered Agents (talks to a running soyaos)
-//   soyaos agent run <slug> "..." invoke an Agent once (talks to a running soyaos)
-//   soyaos agent build [<path>]   build a SoyaPack v0 archive (planned, stub in alpha)
-//   soyaos agent deploy <pack>    register a pack with a running soyaos (planned, stub in alpha)
+//	soyaos start                  boot Solo: all-in-one, OpenAI-Compat on :7474, control RPC on :7475
+//	soyaos version                print build identification
+//	soyaos agent create <name>    scaffold a SoyaPack v0 Agent
+//	soyaos agent list             list registered Agents (talks to a running soyaos)
+//	soyaos agent run <slug> "..." invoke an Agent once (talks to a running soyaos)
+//	soyaos agent build [<path>]   build a SoyaPack v0 archive (planned, stub in alpha)
+//	soyaos agent deploy <pack>    register a pack with a running soyaos (planned, stub in alpha)
+//	soyaos pack validate <path>   parse + validate a SoyaPack v0 manifest
 //
 // Each subcommand has its own flag set parsed with stdlib `flag`.
 package main
@@ -42,6 +43,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/openaicompat"
 	"github.com/soyaos/soyaos/pkg/orbit"
 	"github.com/soyaos/soyaos/pkg/scope"
+	"github.com/soyaos/soyaos/pkg/soyapack"
 	"github.com/soyaos/soyaos/pkg/store"
 	"github.com/soyaos/soyaos/pkg/version"
 )
@@ -64,6 +66,8 @@ func main() {
 		fmt.Println(SpecVersion)
 	case "agent":
 		exit(cmdAgent(os.Args[2:]))
+	case "pack":
+		exit(cmdPack(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -87,6 +91,9 @@ Usage:
                                   invoke an Agent and print its response
   soyaos agent build [<path>]     build a SoyaPack v0 archive (alpha: stub)
   soyaos agent deploy <pack>      register a pack with a running soyaos (alpha: stub)
+  soyaos pack validate <path>     parse + validate a SoyaPack v0 manifest
+                                  (<path> is a directory containing soyapack.yaml
+                                  or a path to a .yaml file)
   soyaos help                     show this message
 
 Environment (all optional — soyaos boots with zero config):
@@ -389,10 +396,10 @@ func cmdAgentCreate(args []string) error {
 		}
 	}
 	files := map[string]string{
-		filepath.Join(name, "soyapack.yaml"): fmt.Sprintf(soyapackTemplate, name, name),
-		filepath.Join(name, "README.md"):     fmt.Sprintf(readmeTemplate, name),
+		filepath.Join(name, "soyapack.yaml"):      fmt.Sprintf(soyapackTemplate, name, name),
+		filepath.Join(name, "README.md"):          fmt.Sprintf(readmeTemplate, name),
 		filepath.Join(name, "prompts", "main.md"): mainPromptTemplate,
-		filepath.Join(name, ".gitignore"):    gitignoreTemplate,
+		filepath.Join(name, ".gitignore"):         gitignoreTemplate,
 	}
 	for path, body := range files {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -511,3 +518,39 @@ const gitignoreTemplate = `# Local build output
 .DS_Store
 `
 
+// --- pack subcommands -------------------------------------------------------
+
+func cmdPack(args []string) error {
+	if len(args) < 1 {
+		return errors.New("pack: missing subcommand (try: validate)")
+	}
+	switch args[0] {
+	case "validate":
+		return cmdPackValidate(args[1:])
+	default:
+		return fmt.Errorf("pack: unknown subcommand %q", args[0])
+	}
+}
+
+// cmdPackValidate parses + validates a SoyaPack v0 manifest. The first
+// positional argument is either a directory (in which case soyapack.yaml is
+// appended) or a path to the manifest file directly.
+func cmdPackValidate(args []string) error {
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		return errors.New("pack validate: expected <path> (directory or .yaml file)")
+	}
+	path := args[0]
+	yamlPath := path
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		yamlPath = filepath.Join(path, "soyapack.yaml")
+	}
+	m, err := soyapack.LoadFromFile(yamlPath)
+	if err != nil {
+		return err
+	}
+	if err := soyapack.Validate(m); err != nil {
+		return err
+	}
+	fmt.Printf("OK · %s/%s@%s · kind=%s\n", m.SpecVersion, m.Name, m.Version, m.Kind)
+	return nil
+}
