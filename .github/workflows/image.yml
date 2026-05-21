@@ -50,6 +50,7 @@ jobs:
           echo "tags=${tags}" >> "${GITHUB_OUTPUT}"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -61,3 +62,23 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             GITSHA=${{ github.sha }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with cosign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          # Sign by digest so all tags pointing at the same manifest share
+          # one signature (and we never sign a moving target like :latest).
+          IFS=',' read -ra tag_list <<< "${TAGS}"
+          for t in "${tag_list[@]}"; do
+            ref="${t%@*}"          # strip any pre-existing @digest
+            target="${ref%:*}@${DIGEST}"
+            echo "Signing ${target}"
+            cosign sign --yes "${target}"
+          done
