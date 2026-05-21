@@ -624,6 +624,133 @@ func TestRegisterFromPack_Channels_HookError_DoesNotBlockRegistration(t *testing
 	}
 }
 
+// --- manifest.actions[] wiring (DD-010 EstateMuse — APP-553) ----------------
+
+func TestRegisterFromPack_Actions_RegisterAndInvoke(t *testing.T) {
+	// EstateMuse-style Pack: one per-row action whose handler prompt
+	// lives at prompts/generate_post.md. After registerFromPack returns,
+	// the kernel must be able to InvokeAction for that (slug, action_id)
+	// and the resolved handler must:
+	//
+	//   - prepend the prompt body as the system message,
+	//   - thread { row_id, payload } through as the user message,
+	//   - rewrite the upstream model id to the resolved real model,
+	//   - return ActionResult.Status == "done" with the LLM body in
+	//     Output["content"].
+	m := minimalAgentManifest("estate-muse", "estate-muse")
+	m.Prompt = &soyapack.Prompt{
+		Upstream: &soyapack.UpstreamDecl{
+			Provider: "openai-compat",
+			Model:    "gpt-4o-mini",
+			BaseURL:  "https://api.example.com/v1",
+		},
+	}
+	m.Actions = []soyapack.ActionDecl{{
+		ID:        "generate_post",
+		On:        "per_row",
+		Handler:   "prompts/generate_post.md",
+		Timeout:   "60s",
+		Artifacts: []string{"wechat_post"},
+	}}
+	dir := writePack(t, m, "SYSTEM main prompt")
+	// Also write the action handler prompt at the path the manifest names.
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "generate_post.md"),
+		[]byte("ACTION: generate a wechat post for the row."), 0o644); err != nil {
+		t.Fatalf("write action handler: %v", err)
+	}
+
+	k := New()
+	fake := &fakeProvider{responses: []string{"<post body for row-17>"}}
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return fake }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+
+	res, err := k.InvokeAction(context.Background(),
+		auth.Identity{Subject: "u1"},
+		"estate-muse", "generate_post", "row-17",
+		map[string]any{"title": "杭州亚运村"},
+	)
+	if err != nil {
+		t.Fatalf("InvokeAction: %v", err)
+	}
+	if res.Status != "done" {
+		t.Errorf("Status = %q, want done", res.Status)
+	}
+	if res.RowID != "row-17" {
+		t.Errorf("RowID = %q, want row-17", res.RowID)
+	}
+	content, _ := res.Output["content"].(string)
+	if content != "<post body for row-17>" {
+		t.Errorf("Output[content] = %q, want LLM body", content)
+	}
+
+	// Provider must have seen exactly one call with system=action prompt,
+	// user=JSON envelope, model=resolved real model.
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.got) != 1 {
+		t.Fatalf("provider got %d calls, want 1", len(fake.got))
+	}
+	req := fake.got[0]
+	if req.Model != "gpt-4o-mini" {
+		t.Errorf("upstream model = %q, want gpt-4o-mini", req.Model)
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("provider got %d messages, want 2", len(req.Messages))
+	}
+	if !strings.Contains(req.Messages[0].Content, "ACTION:") {
+		t.Errorf("system message missing action prompt body: %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "row-17") {
+		t.Errorf("user message missing row_id: %q", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "杭州亚运村") {
+		t.Errorf("user message missing payload: %q", req.Messages[1].Content)
+	}
+}
+
+func TestRegisterFromPack_Actions_MissingHandlerFile(t *testing.T) {
+	m := minimalAgentManifest("act-nofile", "act-nofile")
+	m.Actions = []soyapack.ActionDecl{{
+		ID: "missing", On: "per_row", Handler: "prompts/missing.md",
+	}}
+	dir := writePack(t, m, "x")
+	err := New().RegisterFromPack(m, dir)
+	if err == nil {
+		t.Fatal("RegisterFromPack(missing action prompt) returned nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestRegisterFromPack_Actions_UnknownActionStill404(t *testing.T) {
+	// Registering one action must not register others; InvokeAction for
+	// an undeclared id still returns ErrUnknownAction.
+	m := minimalAgentManifest("act-one", "act-one")
+	m.Actions = []soyapack.ActionDecl{{
+		ID: "first", On: "per_row", Handler: "prompts/first.md",
+	}}
+	dir := writePack(t, m, "x")
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "first.md"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	k := New()
+	if err := k.registerFromPack(m, dir, func(_ llmcall.Config) llmcall.Provider { return &fakeProvider{} }); err != nil {
+		t.Fatalf("registerFromPack: %v", err)
+	}
+	_, err := k.InvokeAction(context.Background(), auth.Identity{}, "act-one", "second", "row-1", nil)
+	if !errors.Is(err, ErrUnknownAction) {
+		t.Errorf("expected ErrUnknownAction, got %v", err)
+	}
+}
+
 func TestRegisterFromPack_ListIncludesAgent(t *testing.T) {
 	m := minimalAgentManifest("listed", "listed")
 	dir := writePack(t, m, "system")

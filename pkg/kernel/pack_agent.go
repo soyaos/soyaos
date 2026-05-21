@@ -27,10 +27,12 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/llmcall"
@@ -117,6 +119,21 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 		Handler:     handler,
 		Manifest:    m,
 	})
+
+	// --- wire manifest.actions[] (DD-010 EstateMuse — APP-553) -----------
+	//
+	// Each ActionDecl gets its prompt file loaded at register time and
+	// installed as a per-Pack handler indexed by (slug, action_id). The
+	// handler treats the prompt body as the system message and the
+	// (row_id + payload) as the user message — that's the contract
+	// EstateMuse's "every row has a generate-post button" leans on.
+	//
+	// A missing prompt file is fatal: the Pack declared it would respond
+	// to this action, so silently registering a stub would leave the
+	// HTTP route 200-but-broken.
+	if err := k.registerPackActions(m, packDir, slug, provider, cfg.Model); err != nil {
+		return err
+	}
 
 	// --- best-effort: wire channels[] + schedules[] ----------------------
 	//
@@ -342,6 +359,94 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 			Stream:      true,
 		}, out)
 	}
+}
+
+// registerPackActions reads each ActionDecl's handler prompt off disk
+// and installs a per-Pack ActionHandler that runs the prompt against
+// the configured upstream model. The handler returns a synchronous
+// "done" ActionResult — alpha doesn't queue, it streams the upstream
+// LLM and folds the body into ActionResult.Output["content"]. Later
+// stages will move to a real task queue.
+func (k *Kernel) registerPackActions(m *soyapack.Manifest, packDir, slug string, provider llmcall.Provider, resolvedModel string) error {
+	for i, decl := range m.Actions {
+		if decl.Handler == "" {
+			return fmt.Errorf("kernel: pack %q actions[%d] (id=%q) missing handler", m.Name, i, decl.ID)
+		}
+		body, err := os.ReadFile(filepath.Join(packDir, decl.Handler))
+		if err != nil {
+			return fmt.Errorf("kernel: read pack %q actions[%d] (id=%q) handler %s: %w",
+				m.Name, i, decl.ID, decl.Handler, err)
+		}
+		k.RegisterPackAction(slug, decl.ID, buildPackActionHandler(string(body), provider, resolvedModel))
+	}
+	return nil
+}
+
+// buildPackActionHandler wraps the prompt body + upstream provider into
+// an ActionHandler. The action's prompt is the system message; the user
+// message is a JSON-encoded { row_id, payload } object so the prompt
+// author can reference it directly. The full streamed response is
+// collected into ActionResult.Output["content"].
+func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolvedModel string) ActionHandler {
+	return func(ctx context.Context, decl soyapack.ActionDecl, req ActionRequest) (ActionResult, error) {
+		userPayload, err := encodeActionUserPayload(req.RowID, req.Payload)
+		if err != nil {
+			return ActionResult{}, fmt.Errorf("kernel: encode action payload: %w", err)
+		}
+		out := make(chan llmcall.Chunk, 8)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- provider.GenerateStream(ctx, llmcall.Request{
+				Model: resolvedModel,
+				Messages: []llmcall.Message{
+					{Role: "system", Content: promptBody},
+					{Role: "user", Content: userPayload},
+				},
+				Stream: true,
+			}, out)
+			close(out)
+		}()
+		var sb strings.Builder
+		for c := range out {
+			if c.Done {
+				continue
+			}
+			sb.WriteString(c.Delta)
+		}
+		if err := <-errCh; err != nil {
+			return ActionResult{}, fmt.Errorf("kernel: action %q upstream: %w", decl.ID, err)
+		}
+		return ActionResult{
+			TaskID:    newTaskID(),
+			Status:    "done",
+			AgentSlug: req.AgentSlug,
+			ActionID:  decl.ID,
+			RowID:     req.RowID,
+			Output: map[string]any{
+				"content":   sb.String(),
+				"handler":   decl.Handler,
+				"artifacts": decl.Artifacts,
+			},
+			EnqueuedAt: time.Now(),
+		}, nil
+	}
+}
+
+// encodeActionUserPayload produces the user-message body the action's
+// prompt sees: a small JSON object pinning the row id and the caller-
+// supplied payload. JSON is the contract because (a) the prompt author
+// can reference fields by name (b) downstream code can re-parse and
+// audit the exact bytes the LLM saw.
+func encodeActionUserPayload(rowID string, payload map[string]any) (string, error) {
+	envelope := map[string]any{
+		"row_id":  rowID,
+		"payload": payload,
+	}
+	buf, err := json.Marshal(envelope)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 // combineUserMessages collapses the caller's message history into the

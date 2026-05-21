@@ -58,8 +58,14 @@ type Kernel struct {
 
 	// Per-row Action dispatch (APP-502). Lock is separate from `mu` so an
 	// in-flight action does not block agent registration / lookup.
+	//
+	// `actionHandler` is the global fallback; `packActions` is the per-
+	// (agentSlug, actionID) registry RegisterFromPack populates so each
+	// Pack can ship its own prompt-backed handler (DD-010 EstateMuse —
+	// APP-553).
 	actionMu      sync.RWMutex
 	actionHandler ActionHandler
+	packActions   map[string]map[string]ActionHandler
 
 	// Optional pluggable hooks consumed by RegisterFromPack when a Pack
 	// declares `schedules:` (DD-007) or `channels:` (DD-006) blocks.

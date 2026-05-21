@@ -61,10 +61,53 @@ type ActionHandler func(ctx context.Context, decl soyapack.ActionDecl, req Actio
 
 // SetActionHandler replaces the kernel's action handler. Tests use this
 // to assert that the dispatcher is invoked with the expected arguments.
+//
+// Per-Pack handlers registered via RegisterPackAction win over this
+// global handler — see InvokeAction. The global handler is the fallback
+// for Packs whose manifest declares actions but for which no per-Pack
+// handler was registered (e.g. legacy EchoAgent flows).
 func (k *Kernel) SetActionHandler(h ActionHandler) {
 	k.actionMu.Lock()
 	defer k.actionMu.Unlock()
 	k.actionHandler = h
+}
+
+// RegisterPackAction installs a per-Pack ActionHandler keyed by
+// (agentSlug, actionID). RegisterFromPack uses this to wire each
+// manifest.actions[] entry to a handler that loads the action's
+// prompt file and runs it through the upstream LLM. Tests use it to
+// inject deterministic handlers without touching the global dispatcher.
+//
+// Returning ok=false from Lookup is harmless — InvokeAction falls back
+// to the global ActionHandler (set via SetActionHandler) or the default
+// echo handler.
+func (k *Kernel) RegisterPackAction(agentSlug, actionID string, h ActionHandler) {
+	k.actionMu.Lock()
+	defer k.actionMu.Unlock()
+	if k.packActions == nil {
+		k.packActions = map[string]map[string]ActionHandler{}
+	}
+	if k.packActions[agentSlug] == nil {
+		k.packActions[agentSlug] = map[string]ActionHandler{}
+	}
+	k.packActions[agentSlug][actionID] = h
+}
+
+// lookupPackAction returns the registered per-Pack ActionHandler for
+// (agentSlug, actionID), if any. The boolean second return reports
+// presence so callers can distinguish "registered nil" from "absent".
+func (k *Kernel) lookupPackAction(agentSlug, actionID string) (ActionHandler, bool) {
+	k.actionMu.RLock()
+	defer k.actionMu.RUnlock()
+	if k.packActions == nil {
+		return nil, false
+	}
+	bySlug, ok := k.packActions[agentSlug]
+	if !ok {
+		return nil, false
+	}
+	h, ok := bySlug[actionID]
+	return h, ok
 }
 
 // kernelActionFields is the mixin embedded into Kernel via the
@@ -113,9 +156,18 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 		return ActionResult{}, fmt.Errorf("%w: %s/%s", ErrUnknownAction, slug, actionID)
 	}
 
-	k.actionMu.RLock()
-	h := k.actionHandler
-	k.actionMu.RUnlock()
+	// Resolution order: per-Pack handler (registered by RegisterFromPack)
+	// wins, then the global ActionHandler (set via SetActionHandler), then
+	// the default echo handler. This ordering lets a Pack ship its own
+	// per-row handler without having to take over the global dispatch
+	// surface, while leaving older tests that wire SetActionHandler
+	// untouched.
+	h, ok := k.lookupPackAction(agent.Slug, actionID)
+	if !ok {
+		k.actionMu.RLock()
+		h = k.actionHandler
+		k.actionMu.RUnlock()
+	}
 	if h == nil {
 		h = defaultActionHandler
 	}
