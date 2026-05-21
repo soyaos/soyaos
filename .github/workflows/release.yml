@@ -67,7 +67,7 @@ jobs:
             echo "No signature artifacts to upload."
           fi
 
-      - name: Release notes verification
+      - name: Release notes verification (step summary)
         run: |
           {
             echo "## Release notes verification"
@@ -84,3 +84,34 @@ jobs:
             echo "  <asset>"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Append verify-blob hint to release body
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # gh release edit replaces the body wholesale, so we read it first
+          # and append our verify-blob hint to a tmp file, then write back.
+          current_body="$(gh release view "${TAG}" --json body --jq .body)"
+          # Idempotency: only append if the hint is not already in the body.
+          if printf '%s' "${current_body}" | grep -qF "Verify release assets"; then
+            echo "verify-blob hint already present in release body; skipping append."
+            exit 0
+          fi
+          {
+            printf '%s\n\n' "${current_body}"
+            printf '%s\n' "---"
+            printf '\n### Verify release assets\n\n'
+            printf 'Each release asset is signed with Sigstore keyless cosign. Verify any asset:\n\n'
+            printf '```sh\n'
+            printf 'cosign verify-blob \\\n'
+            printf '  --certificate <asset>.cert \\\n'
+            printf '  --signature   <asset>.sig \\\n'
+            printf "  --certificate-identity-regexp 'https://github.com/soyaos/soyaos/' \\\\\n"
+            printf '  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\\n'
+            printf '  <asset>\n'
+            printf '```\n'
+          } > /tmp/body.md
+          gh release edit "${TAG}" --notes-file /tmp/body.md
