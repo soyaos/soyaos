@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -195,6 +196,134 @@ func TestValidate_ScheduleRequiresCronOrOnce(t *testing.T) {
 	if err := soyapack.Validate(m); err == nil {
 		t.Fatal("Validate(schedule without cron/once) returned nil")
 	}
+}
+
+func TestValidate_PromptUpstream_Valid(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{
+		Upstream: &soyapack.UpstreamDecl{
+			Provider:  "openai-compat",
+			BaseURL:   "https://api.deepseek.com/v1",
+			Model:     "deepseek-chat",
+			APIKeyRef: "${SOYA_MODEL_API_KEY}",
+		},
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(valid upstream) = %v, want nil", err)
+	}
+}
+
+func TestValidate_PromptUpstream_RejectsUnsupportedProvider(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{
+		Upstream: &soyapack.UpstreamDecl{Provider: "anthropic"},
+	}
+	err := soyapack.Validate(m)
+	if err == nil {
+		t.Fatal("Validate(unsupported provider) returned nil")
+	}
+	if !errors.Is(err, soyapack.ErrUnsupportedProvider) {
+		t.Fatalf("error must wrap ErrUnsupportedProvider, got %v", err)
+	}
+}
+
+func TestValidate_PromptUpstream_RejectsBadAPIKeyRef(t *testing.T) {
+	bad := []string{
+		"sk-deadbeef",        // inline secret form
+		"$ENV_NAME",          // missing braces
+		"${lowercase}",       // lower-case not allowed
+		"${1LEADING_DIGIT}",  // must start with letter or underscore
+		"${MY-DASH}",         // dash not allowed
+		"${}",                // empty name
+	}
+	for _, ref := range bad {
+		m := minimalAgentManifest()
+		m.Prompt = &soyapack.Prompt{
+			Upstream: &soyapack.UpstreamDecl{Provider: "openai-compat", APIKeyRef: ref},
+		}
+		err := soyapack.Validate(m)
+		if err == nil {
+			t.Fatalf("Validate(api_key_ref=%q) returned nil", ref)
+		}
+		if !errors.Is(err, soyapack.ErrBadAPIKeyRef) {
+			t.Fatalf("api_key_ref=%q: error must wrap ErrBadAPIKeyRef, got %v", ref, err)
+		}
+	}
+}
+
+func TestValidate_PromptUpstream_NilOK(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{Scaffold: "minimal-input-high-quality"}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(no upstream) = %v, want nil", err)
+	}
+	m = minimalAgentManifest()
+	m.Prompt = nil
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(no prompt) = %v, want nil", err)
+	}
+}
+
+func TestLoad_PromptUpstream_NoInlineAPIKeyField(t *testing.T) {
+	// Defense-in-depth: the typed UpstreamDecl struct has no `APIKey` field,
+	// so even if yaml.v3's lenient nested decode silently drops an
+	// `api_key:` line, the manifest can never surface an inline secret to
+	// runtime code. This test pins that surface — a future contributor
+	// adding `APIKey` to UpstreamDecl would have to rip out this assertion.
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: leaky
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+entry: prompts/main.md
+expose: { openai_compat: chat, virtual_model_id: soya:leaky }
+prompt:
+  upstream:
+    provider: openai-compat
+    api_key_ref: ${SOYA_MODEL_API_KEY}
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if m.Prompt == nil || m.Prompt.Upstream == nil {
+		t.Fatal("expected prompt.upstream to be populated")
+	}
+	if m.Prompt.Upstream.APIKeyRef != "${SOYA_MODEL_API_KEY}" {
+		t.Fatalf("api_key_ref = %q", m.Prompt.Upstream.APIKeyRef)
+	}
+	// Sanity-check the struct surface stays ref-only by reflecting on
+	// declared fields — the only way to leak inline secrets would be to
+	// add a new typed field here.
+	if got := reflectFieldNames(*m.Prompt.Upstream); !containsAll(got, []string{"Provider", "BaseURL", "Model", "APIKeyRef"}) || len(got) != 4 {
+		t.Fatalf("UpstreamDecl fields drifted: %v (must be exactly 4 ref-only fields)", got)
+	}
+}
+
+func reflectFieldNames(v any) []string {
+	t := reflect.TypeOf(v)
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		out = append(out, t.Field(i).Name)
+	}
+	return out
+}
+
+func containsAll(haystack, needles []string) bool {
+	set := map[string]bool{}
+	for _, h := range haystack {
+		set[h] = true
+	}
+	for _, n := range needles {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // minimalAgentManifest returns the smallest manifest that should pass

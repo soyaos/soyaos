@@ -30,6 +30,20 @@ var reVirtualModelID = regexp.MustCompile(`^soya:[a-z][a-z0-9-]{0,46}[a-z0-9]$|^
 // reSHA256Hex matches a 64-character lowercase hex string.
 var reSHA256Hex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+// reAPIKeyRef matches the locked-in ${ENV_NAME} form for prompt.upstream
+// API key references. Inline secrets are forbidden — the env name must be
+// upper-case, start with letter/underscore, and contain only the standard
+// shell-identifier character class. (APP-543)
+var reAPIKeyRef = regexp.MustCompile(`^\$\{[A-Z_][A-Z0-9_]+\}$`)
+
+// ErrUnsupportedProvider is returned when prompt.upstream.provider is not
+// "openai-compat". Other providers are reserved for later milestones.
+var ErrUnsupportedProvider = errors.New("soyapack: unsupported upstream provider")
+
+// ErrBadAPIKeyRef is returned when prompt.upstream.api_key_ref does not
+// match the ${ENV_NAME} form. Inline secrets are forbidden.
+var ErrBadAPIKeyRef = errors.New("soyapack: bad api_key_ref")
+
 // Validate enforces the semantic constraints from
 // specs/soyapack/v0/manifest.md. Returns an error wrapping ErrInvalidManifest
 // when the manifest is malformed; nil otherwise.
@@ -236,6 +250,29 @@ func validateAgent(m *Manifest) error {
 	}
 	if m.Expose.VirtualModelID != "" && !reVirtualModelID.MatchString(m.Expose.VirtualModelID) {
 		return wrap("Agent: expose.virtual_model_id must match ^soya:<slug>$, got %q", m.Expose.VirtualModelID)
+	}
+	if m.Prompt != nil && m.Prompt.Upstream != nil {
+		if err := validateUpstream(m.Prompt.Upstream); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateUpstream enforces the prompt.upstream rules (APP-543):
+//
+//   - provider must be "openai-compat" (other values reserved).
+//   - api_key_ref, if set, must match ${ENV_NAME}; inline secrets are
+//     forbidden (the strict YAML decoder additionally rejects unknown
+//     fields under UpstreamDecl, so an `api_key:` literal fails to load).
+func validateUpstream(u *UpstreamDecl) error {
+	if u.Provider != "openai-compat" {
+		return fmt.Errorf("%w: prompt.upstream.provider must be %q, got %q",
+			ErrUnsupportedProvider, "openai-compat", u.Provider)
+	}
+	if u.APIKeyRef != "" && !reAPIKeyRef.MatchString(u.APIKeyRef) {
+		return fmt.Errorf("%w: prompt.upstream.api_key_ref must match ${ENV_NAME} (pattern %s), got %q",
+			ErrBadAPIKeyRef, reAPIKeyRef.String(), u.APIKeyRef)
 	}
 	return nil
 }

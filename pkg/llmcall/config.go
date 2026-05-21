@@ -1,6 +1,11 @@
 package llmcall
 
-import "os"
+import (
+	"os"
+	"strings"
+
+	"github.com/soyaos/soyaos/pkg/soyapack"
+)
 
 // Env var names. Keep them grouped under SOYA_MODEL_ so the operator can scan
 // one prefix and know everything that points the LLM call layer at a real
@@ -57,3 +62,37 @@ func LoadConfigFromEnv() Config {
 // upstream call. APIKey is the single signal — base URL and model both have
 // safe defaults.
 func (c Config) Configured() bool { return c.APIKey != "" }
+
+// ResolveConfig merges a manifest-supplied UpstreamDecl on top of the
+// env-derived Config. Precedence is:
+//
+//	decl (prompt.upstream)  >  env (SOYA_MODEL_*)  >  built-in defaults
+//
+// Passing a nil decl is the same as calling LoadConfigFromEnv directly:
+// callers that don't care about per-Agent BYOK overrides need no
+// branching at the call site.
+//
+// APIKeyRef is dereferenced through os.Getenv against the env name
+// embedded in the ${ENV_NAME} reference. When that env var is unset, the
+// resolver falls through to the operator's SOYA_MODEL_API_KEY (already
+// baked into the base Config) — this lets a Pack author declare the
+// reference without forcing every operator to populate it. (APP-543)
+func ResolveConfig(decl *soyapack.UpstreamDecl) Config {
+	cfg := LoadConfigFromEnv()
+	if decl == nil {
+		return cfg
+	}
+	if decl.BaseURL != "" {
+		cfg.BaseURL = decl.BaseURL
+	}
+	if decl.Model != "" {
+		cfg.Model = decl.Model
+	}
+	if decl.APIKeyRef != "" {
+		envName := strings.TrimSuffix(strings.TrimPrefix(decl.APIKeyRef, "${"), "}")
+		if v := os.Getenv(envName); v != "" {
+			cfg.APIKey = v
+		}
+	}
+	return cfg
+}

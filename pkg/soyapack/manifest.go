@@ -128,8 +128,24 @@ type Input struct {
 
 // Prompt holds prompt-scaffolding hints.
 type Prompt struct {
-	Scaffold string   `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
-	Tools    []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Scaffold string        `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
+	Tools    []string      `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Upstream *UpstreamDecl `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+}
+
+// UpstreamDecl is the per-Agent BYOK upstream override declared under
+// `prompt.upstream`. When set, it wins over the operator-level
+// SOYA_MODEL_* env vars at dispatch time; see pkg/llmcall.ResolveConfig.
+//
+// Inline secrets are forbidden: APIKeyRef must be of the form ${ENV_NAME}
+// referencing an environment variable on the SoyaOS host. The strict YAML
+// decoder rejects unknown fields under this struct, so a literal
+// `api_key:` line in soyapack.yaml fails to load. (APP-543)
+type UpstreamDecl struct {
+	Provider  string `yaml:"provider" json:"provider"`
+	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	Model     string `yaml:"model,omitempty" json:"model,omitempty"`
+	APIKeyRef string `yaml:"api_key_ref,omitempty" json:"api_key_ref,omitempty"`
 }
 
 // ArtifactDecl declares an output form. (Proposed DD-012.)
