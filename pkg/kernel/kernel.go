@@ -4,10 +4,10 @@
 //
 // In v0.1.0-alpha.0 the kernel implements only the Solo path:
 //
-//   1. The OpenAI-Compat Gateway resolves Authorization → Identity via pkg/auth.
-//   2. The Gateway calls kernel.ChatCompletion with the resolved Identity.
-//   3. The kernel finds the registered Agent for the model id.
-//   4. The Agent's Handler is invoked; its returned chunks are forwarded.
+//  1. The OpenAI-Compat Gateway resolves Authorization → Identity via pkg/auth.
+//  2. The Gateway calls kernel.ChatCompletion with the resolved Identity.
+//  3. The kernel finds the registered Agent for the model id.
+//  4. The Agent's Handler is invoked; its returned chunks are forwarded.
 //
 // This is enough to ship a working OpenAI-Compat smoke test through an Echo
 // Agent — and it leaves room for real LLM-backed Agents (DD-008 / 009 / 010

@@ -68,8 +68,8 @@ func (s *Server) Handler() http.Handler {
 // --- agents -----------------------------------------------------------------
 
 type agentRow struct {
-	ID          string `json:"id"`           // canonical "soya:<slug>"
-	Slug        string `json:"slug"`         // bare slug
+	ID          string `json:"id"`   // canonical "soya:<slug>"
+	Slug        string `json:"slug"` // bare slug
 	Description string `json:"description"`
 }
 

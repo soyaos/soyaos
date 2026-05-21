@@ -5,11 +5,11 @@
 // the control RPC surface (control.v0) and exposes verbs that are too
 // noisy or too dangerous to put in the user CLI:
 //
-//   soyactl nodes ls / drain / cordon         — orbit registry inspection
-//   soyactl scheduler jobs ls / pause / resume — pkg/scheduler control
-//   soyactl scope events tail                  — live event log stream
-//   soyactl auth keys ls / revoke              — API key management
-//   soyactl runtime gate dryrun                — Capability-gate decision trace
+//	soyactl nodes ls / drain / cordon         — orbit registry inspection
+//	soyactl scheduler jobs ls / pause / resume — pkg/scheduler control
+//	soyactl scope events tail                  — live event log stream
+//	soyactl auth keys ls / revoke              — API key management
+//	soyactl runtime gate dryrun                — Capability-gate decision trace
 //
 // This binary is a Day-1 stub: the verbs above are reserved (locked by the
 // cli.v0 spec) but not yet implemented. Running it prints the surface and

@@ -223,10 +223,10 @@ func TestActions_RowTokenForDifferentRowRejected(t *testing.T) {
 
 func TestParseAgentActionPath(t *testing.T) {
 	tests := []struct {
-		path    string
-		ok      bool
-		slug    string
-		action  string
+		path   string
+		ok     bool
+		slug   string
+		action string
 	}{
 		{"/v1/agents/foo/actions/bar", true, "foo", "bar"},
 		{"/v1/agents/foo/actions/bar/baz", true, "foo", "bar/baz"},

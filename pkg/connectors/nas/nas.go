@@ -72,8 +72,8 @@ type Config struct {
 	Password string
 
 	// Bucket and Region are S3-specific.
-	Bucket   string
-	Region   string
+	Bucket string
+	Region string
 
 	// Endpoint is the override for S3-compatible services (MinIO / R2).
 	Endpoint string

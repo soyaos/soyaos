@@ -48,7 +48,10 @@ func TestInMemory_TTLExpires(t *testing.T) {
 func TestInMemory_ListFilterByScopeOwnerPrefix(t *testing.T) {
 	m := memory.NewInMemory()
 	ctx := context.Background()
-	for _, kv := range []struct{ s memory.Scope; o, k string }{
+	for _, kv := range []struct {
+		s    memory.Scope
+		o, k string
+	}{
 		{memory.ScopeAgent, "a1", "task/1"},
 		{memory.ScopeAgent, "a1", "task/2"},
 		{memory.ScopeAgent, "a1", "log/1"},

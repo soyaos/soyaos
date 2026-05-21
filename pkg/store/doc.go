@@ -9,8 +9,8 @@
 //
 // Layout:
 //
-//   <data-dir>/
-//     soyaos.bolt          // single bbolt database, one bucket per namespace
+//	<data-dir>/
+//	  soyaos.bolt          // single bbolt database, one bucket per namespace
 //
 // Namespaces in use:
 //   - "auth.keys"          API keys keyed by raw `sk-soya-...`

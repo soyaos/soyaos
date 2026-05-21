@@ -54,10 +54,10 @@ type UsageQuery struct {
 // (api_key_prefix, agent_slug, sandbox_image). Live buckets stay in
 // memory; Flush moves closed buckets to the backing store.
 type UsageAggregator struct {
-	store  store.Store
-	now    func() time.Time
-	mu     sync.Mutex
-	live   map[string]*UsagePayload // key: bucketKey
+	store store.Store
+	now   func() time.Time
+	mu    sync.Mutex
+	live  map[string]*UsagePayload // key: bucketKey
 }
 
 // NewUsageAggregator returns an aggregator backed by s. Nil s is permitted

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="SoyaOS" width="120" height="120" />
+</p>
+
 # SoyaOS
 
 **简体中文** | [English](README.md)

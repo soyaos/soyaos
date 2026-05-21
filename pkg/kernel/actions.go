@@ -156,4 +156,3 @@ func newTaskID() string {
 	}
 	return "task-" + hex.EncodeToString(raw[:])
 }
-

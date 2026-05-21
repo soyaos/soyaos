@@ -2,7 +2,7 @@
 //
 // Every Agent run can emit one or more Artifacts. v0.1.0 admits six forms:
 //
-//   HTML / PDF / long_image / Markdown / Excel / MP4
+//	HTML / PDF / long_image / Markdown / Excel / MP4
 //
 // Each Artifact carries a schema identifier with SemVer (e.g. "guide.v1") so
 // downstream readers can validate compatibility. Multiple Artifacts produced

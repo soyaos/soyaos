@@ -120,18 +120,18 @@ func signInbound(timestamp, secret string) string {
 // decode only the fields we care about — DingTalk adds new ones over
 // time and the parser must remain forward-compatible.
 type dingPayload struct {
-	MsgType         string            `json:"msgtype"`
-	Text            *dingText         `json:"text,omitempty"`
-	Markdown        *dingMarkdown     `json:"markdown,omitempty"`
-	SenderStaffID   string            `json:"senderStaffId,omitempty"`
-	SenderID        string            `json:"senderId,omitempty"`
-	SenderNick      string            `json:"senderNick,omitempty"`
-	AtUsers         []dingAtUser      `json:"atUsers,omitempty"`
-	IsInAtList      bool              `json:"isInAtList,omitempty"`
-	ConversationID  string            `json:"conversationId,omitempty"`
-	MsgID           string            `json:"msgId,omitempty"`
-	CreateAt        int64             `json:"createAt,omitempty"`
-	Extras          map[string]string `json:"extras,omitempty"`
+	MsgType        string            `json:"msgtype"`
+	Text           *dingText         `json:"text,omitempty"`
+	Markdown       *dingMarkdown     `json:"markdown,omitempty"`
+	SenderStaffID  string            `json:"senderStaffId,omitempty"`
+	SenderID       string            `json:"senderId,omitempty"`
+	SenderNick     string            `json:"senderNick,omitempty"`
+	AtUsers        []dingAtUser      `json:"atUsers,omitempty"`
+	IsInAtList     bool              `json:"isInAtList,omitempty"`
+	ConversationID string            `json:"conversationId,omitempty"`
+	MsgID          string            `json:"msgId,omitempty"`
+	CreateAt       int64             `json:"createAt,omitempty"`
+	Extras         map[string]string `json:"extras,omitempty"`
 }
 
 type dingText struct {
