@@ -228,11 +228,11 @@ type EgressRule struct {
 
 // LLMCapability bounds the LLM calls a Pack may make.
 type LLMCapability struct {
-	Model         string       `yaml:"model,omitempty" json:"model,omitempty"`
-	Temperature   *FloatBounds `yaml:"temperature,omitempty" json:"temperature,omitempty"`
-	MaxTokens     int          `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	QuotaPerCall  int          `yaml:"quota_per_call,omitempty" json:"quota_per_call,omitempty"`
-	QuotaPerDay   int          `yaml:"quota_per_day,omitempty" json:"quota_per_day,omitempty"`
+	Model        string       `yaml:"model,omitempty" json:"model,omitempty"`
+	Temperature  *FloatBounds `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	MaxTokens    int          `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	QuotaPerCall int          `yaml:"quota_per_call,omitempty" json:"quota_per_call,omitempty"`
+	QuotaPerDay  int          `yaml:"quota_per_day,omitempty" json:"quota_per_day,omitempty"`
 }
 
 // FloatBounds is a closed range [Min, Max].
@@ -256,7 +256,7 @@ type NASMount struct {
 
 // Resources caps the compute budget per Pack invocation.
 type Resources struct {
-	CPU      int `yaml:"cpu,omitempty" json:"cpu,omitempty"`           // vCPU
+	CPU      int `yaml:"cpu,omitempty" json:"cpu,omitempty"` // vCPU
 	RAMMB    int `yaml:"ram_mb,omitempty" json:"ram_mb,omitempty"`
 	TimeoutS int `yaml:"timeout_s,omitempty" json:"timeout_s,omitempty"`
 	GPU      int `yaml:"gpu,omitempty" json:"gpu,omitempty"`
