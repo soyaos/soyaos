@@ -30,6 +30,20 @@ var reVirtualModelID = regexp.MustCompile(`^soya:[a-z][a-z0-9-]{0,46}[a-z0-9]$|^
 // reSHA256Hex matches a 64-character lowercase hex string.
 var reSHA256Hex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+// reAPIKeyRef matches the locked-in ${ENV_NAME} form for prompt.upstream
+// API key references. Inline secrets are forbidden — the env name must be
+// upper-case, start with letter/underscore, and contain only the standard
+// shell-identifier character class. (APP-543)
+var reAPIKeyRef = regexp.MustCompile(`^\$\{[A-Z_][A-Z0-9_]+\}$`)
+
+// ErrUnsupportedProvider is returned when prompt.upstream.provider is not
+// "openai-compat". Other providers are reserved for later milestones.
+var ErrUnsupportedProvider = errors.New("soyapack: unsupported upstream provider")
+
+// ErrBadAPIKeyRef is returned when prompt.upstream.api_key_ref does not
+// match the ${ENV_NAME} form. Inline secrets are forbidden.
+var ErrBadAPIKeyRef = errors.New("soyapack: bad api_key_ref")
+
 // Validate enforces the semantic constraints from
 // specs/soyapack/v0/manifest.md. Returns an error wrapping ErrInvalidManifest
 // when the manifest is malformed; nil otherwise.
@@ -141,6 +155,15 @@ func Validate(m *Manifest) error {
 		default:
 			return wrap("channels[%d].kind %q not in {dingtalk,feishu,wework,wechat-mp,wechat-cs,webhook}", i, c.Kind)
 		}
+		// Secrets must be ${ENV_NAME} refs; inline secrets are
+		// forbidden so a leaked manifest never leaks creds. The same
+		// rule already governs prompt.upstream.api_key_ref (APP-543);
+		// channel.secrets[*] follows the precedent.
+		for k, v := range c.Secrets {
+			if !reAPIKeyRef.MatchString(v) {
+				return wrap("channels[%d].secrets[%q] must be of the form ${ENV_NAME} (got %q)", i, k, v)
+			}
+		}
 	}
 
 	// --- actions ------------------------------------------------------------
@@ -152,6 +175,39 @@ func Validate(m *Manifest) error {
 		case "per_row", "button", "api":
 		default:
 			return wrap("actions[%d].on must be per_row/button/api, got %q", i, a.On)
+		}
+	}
+
+	// --- storage_nas --------------------------------------------------------
+	//
+	// Top-level storage_nas[] is the SilentCut (DD-011) declaration that
+	// the Agent will write artifacts (typically MP4) to a NAS. The kernel
+	// hands the validated declaration to a NASHook on RegisterFromPack so
+	// the host adapter can resolve env-var-ref creds and produce a
+	// pkg/connectors/nas.NAS handle.
+	for i, s := range m.StorageNAS {
+		switch s.Protocol {
+		case "smb", "nfs", "webdav", "s3":
+		default:
+			return wrap("storage_nas[%d].protocol must be one of smb/nfs/webdav/s3, got %q", i, s.Protocol)
+		}
+		if s.HostRef == "" {
+			return wrap("storage_nas[%d].host_ref is required", i)
+		}
+		if s.Share == "" {
+			return wrap("storage_nas[%d].share is required", i)
+		}
+		if s.Access != "" {
+			switch s.Access {
+			case "ro", "rw":
+			default:
+				return wrap("storage_nas[%d].access must be ro/rw, got %q", i, s.Access)
+			}
+		}
+		for k, v := range s.Secrets {
+			if !reAPIKeyRef.MatchString(v) {
+				return wrap("storage_nas[%d].secrets[%q] must be of the form ${ENV_NAME} (got %q)", i, k, v)
+			}
 		}
 	}
 
@@ -181,14 +237,75 @@ func Validate(m *Manifest) error {
 				return wrap("sandbox.isolation must be process/container/microvm, got %q", m.Sandbox.Isolation)
 			}
 		}
+		if m.Sandbox.Capabilities != nil {
+			if err := validateCapabilities(m.Sandbox.Capabilities); err != nil {
+				return err
+			}
+		}
+	}
+
+	// --- top-level Skill capabilities --------------------------------------
+	if m.Capabilities != nil {
+		if err := validateCapabilities(m.Capabilities); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
+// validateCapabilities enforces the fail-closed gate surface: any
+// network_out entry must declare a real host, a port in [1, 65535] and
+// one of the canonical protos. Empty fields would be silently treated
+// as "deny all", but a present-but-malformed entry is almost always an
+// authoring bug — reject it loudly here so it never reaches the gate.
+func validateCapabilities(c *Capabilities) error {
+	for i, r := range c.NetworkOut {
+		if r.Host == "" {
+			return wrap("capabilities.network_out[%d].host is required", i)
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			return wrap("capabilities.network_out[%d].port must be in [1,65535], got %d", i, r.Port)
+		}
+		switch r.Proto {
+		case "http", "https", "grpc", "quic":
+		default:
+			return wrap("capabilities.network_out[%d].proto must be one of http/https/grpc/quic, got %q", i, r.Proto)
+		}
+	}
+	return nil
+}
+
 func validateAgent(m *Manifest) error {
-	if m.Entry == "" {
-		return wrap("Agent: entry is required")
+	// Prompt body shape: exactly one of `entry` or `prompt.steps[]`.
+	// Both forms are valid v0 surfaces:
+	//
+	//   - entry        — single system prompt (the default).
+	//   - prompt.steps — ordered N-stage chain (APP-550 Phase B).
+	//
+	// Both empty is a manifest authoring bug; both set is ambiguous and
+	// we refuse it loudly rather than silently picking one.
+	hasSteps := m.Prompt != nil && len(m.Prompt.Steps) > 0
+	switch {
+	case m.Entry == "" && !hasSteps:
+		return wrap("Agent: either entry or prompt.steps is required")
+	case m.Entry != "" && hasSteps:
+		return wrap("Agent: entry and prompt.steps are mutually exclusive")
+	}
+	if hasSteps {
+		seen := map[string]struct{}{}
+		for i, s := range m.Prompt.Steps {
+			if s.ID == "" {
+				return wrap("Agent: prompt.steps[%d].id is required", i)
+			}
+			if s.Prompt == "" {
+				return wrap("Agent: prompt.steps[%d].prompt is required", i)
+			}
+			if _, dup := seen[s.ID]; dup {
+				return wrap("Agent: prompt.steps[%d].id %q is duplicated", i, s.ID)
+			}
+			seen[s.ID] = struct{}{}
+		}
 	}
 	if m.Expose == nil {
 		return wrap("Agent: expose is required")
@@ -202,6 +319,29 @@ func validateAgent(m *Manifest) error {
 	}
 	if m.Expose.VirtualModelID != "" && !reVirtualModelID.MatchString(m.Expose.VirtualModelID) {
 		return wrap("Agent: expose.virtual_model_id must match ^soya:<slug>$, got %q", m.Expose.VirtualModelID)
+	}
+	if m.Prompt != nil && m.Prompt.Upstream != nil {
+		if err := validateUpstream(m.Prompt.Upstream); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateUpstream enforces the prompt.upstream rules (APP-543):
+//
+//   - provider must be "openai-compat" (other values reserved).
+//   - api_key_ref, if set, must match ${ENV_NAME}; inline secrets are
+//     forbidden (the strict YAML decoder additionally rejects unknown
+//     fields under UpstreamDecl, so an `api_key:` literal fails to load).
+func validateUpstream(u *UpstreamDecl) error {
+	if u.Provider != "openai-compat" {
+		return fmt.Errorf("%w: prompt.upstream.provider must be %q, got %q",
+			ErrUnsupportedProvider, "openai-compat", u.Provider)
+	}
+	if u.APIKeyRef != "" && !reAPIKeyRef.MatchString(u.APIKeyRef) {
+		return fmt.Errorf("%w: prompt.upstream.api_key_ref must match ${ENV_NAME} (pattern %s), got %q",
+			ErrBadAPIKeyRef, reAPIKeyRef.String(), u.APIKeyRef)
 	}
 	return nil
 }

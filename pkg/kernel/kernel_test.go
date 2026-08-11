@@ -6,16 +6,16 @@ import (
 	"testing"
 
 	"github.com/soyaos/soyaos/pkg/auth"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 func TestKernel_RegisterAndChatCompletion_Echo(t *testing.T) {
 	k := New()
 	k.Register(EchoAgent)
 
-	resp, err := k.ChatCompletion(context.Background(), auth.Identity{Subject: "local"}, modelgw.Request{
+	resp, err := k.ChatCompletion(context.Background(), auth.Identity{Subject: "local"}, llmcall.Request{
 		Model:    "soya:echo",
-		Messages: []modelgw.Message{{Role: "user", Content: "hello"}},
+		Messages: []llmcall.Message{{Role: "user", Content: "hello"}},
 	})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -44,7 +44,7 @@ func TestKernel_LookupAcceptsBareSlug(t *testing.T) {
 
 func TestKernel_UnknownAgent(t *testing.T) {
 	k := New()
-	_, err := k.ChatCompletion(context.Background(), auth.Identity{}, modelgw.Request{Model: "soya:missing"})
+	_, err := k.ChatCompletion(context.Background(), auth.Identity{}, llmcall.Request{Model: "soya:missing"})
 	if err == nil {
 		t.Fatal("ChatCompletion(unknown) returned nil error")
 	}
@@ -54,11 +54,11 @@ func TestKernel_StreamFanout(t *testing.T) {
 	k := New()
 	k.Register(EchoAgent)
 
-	out := make(chan modelgw.Chunk, 4)
+	out := make(chan llmcall.Chunk, 4)
 	go func() {
-		_ = k.ChatCompletionStream(context.Background(), auth.Identity{}, modelgw.Request{
+		_ = k.ChatCompletionStream(context.Background(), auth.Identity{}, llmcall.Request{
 			Model:    "soya:echo",
-			Messages: []modelgw.Message{{Role: "user", Content: "ping"}},
+			Messages: []llmcall.Message{{Role: "user", Content: "ping"}},
 		}, out)
 		close(out)
 	}()

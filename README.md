@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="SoyaOS" width="120" height="120" />
+</p>
+
 # SoyaOS
 
 [简体中文](README.zh-CN.md) | **English**
@@ -18,10 +22,10 @@ The v0.1.0 milestone is locked to four flagship user stories (DD-008 ~ DD-011):
 
 | # | Agent | Persona | Aha Moment |
 |---|---|---|---|
-| DD-008 | **Compo** | Parents tutoring kids | One sample essay + title → printable PDF writing guide |
-| DD-009 | **NewsBeam** | AI knowledge workers | One sentence → daily 9am AI news long-image to DingTalk |
-| DD-010 | **EstateMuse** | Real-estate creators | One sentence → 500 topic ideas in Excel, per-row "generate post/video" actions |
-| DD-011 | **SilentCut** | Solo video creators | NL → Remotion script → Comet renders → MP4 lands on your NAS |
+| DD-008 | **Compo** ([reference repo](https://github.com/soyaos/example-essay-tutor)) | Parents tutoring kids | One sample essay + title → printable PDF writing guide |
+| DD-009 | **NewsBeam** ([reference repo](https://github.com/soyaos/example-news-beam)) | AI knowledge workers | One sentence → daily 9am AI news long-image to DingTalk |
+| DD-010 | **EstateMuse** ([reference repo](https://github.com/soyaos/example-estate-muse)) | Real-estate creators | One sentence → 500 topic ideas in Excel, per-row "generate post/video" actions |
+| DD-011 | **SilentCut** ([reference repo](https://github.com/soyaos/example-silent-cut)) | Solo video creators | NL → Remotion script → Comet renders → MP4 lands on your NAS |
 
 When all four stories run end-to-end across the six editions, v0.1.0 ships.
 
@@ -48,6 +52,20 @@ Three node roles forming the SoyaOS network:
 | 05 | SoyaOS Enterprise Cloud | `ent-cloud` | Multi-tenant SaaS with SSO, SLAs, compliance |
 | 06 | SoyaOS Enterprise Private | `ent-private` | On-prem / air-gapped, customer-managed |
 
+## Concepts
+
+Five concepts you will see again and again across the docs, the CLI, and the code. Each is one Go package away.
+
+| Concept | What it is | Code |
+|---|---|---|
+| **SoyaKernel** | The single-binary core that hosts every other concept. | `pkg/kernel` |
+| **SoyaPack** | The portable, declarative Agent format (manifest + prompts + tools + sandbox). | `specs/specs/soyapack/v0/` + `pkg/soyapack` |
+| **SoyaForge** | The Agent Factory that turns natural-language intent into a SoyaPack manifest. | `pkg/factory` |
+| **SoyaScope** | The append-only event log behind audit, scheduling, and per-second billing. | `pkg/scope` |
+| **SoyaAuth** | API key issuance, scope tokens, and row-scoped JWT for shared artifacts. | `pkg/auth` |
+
+> Aha: paste `base_url`, `api_key`, and `model` into Cherry Studio and chat with your Agent as if it were just another OpenAI model.
+
 ## Repository layout
 
 ```
@@ -64,7 +82,7 @@ soyaos/                        # this repo (core monorepo)
 │   ├── runtime/               # Comet sandbox runtime
 │   ├── auth/                  # SoyaAuth — zero-trust, capability tokens
 │   ├── scope/                 # SoyaScope — observability, replay
-│   ├── modelgw/               # Model Gateway (BYOK / platform / private vLLM)
+│   ├── llmcall/               # LLM call layer behind the OpenAI-Compat Gateway (BYOK / platform / private vLLM)
 │   ├── scheduler/             # cron + one-shot scheduler (DD-007)
 │   ├── connectors/            # Channel Connectors — DingTalk/Feishu/WeChat/... (DD-006)
 │   ├── artifact/              # Artifact abstraction — HTML/PDF/long_image/MD/XLSX/MP4
@@ -105,6 +123,19 @@ curl http://127.0.0.1:7474/v1/models \
 ```
 
 See [`examples/echo-agent/`](examples/echo-agent/) for the first runnable agent.
+
+### Use from any OpenAI-Compatible client
+
+SoyaOS speaks the OpenAI `/v1/chat/completions` API verbatim. Paste the same three values — `base_url`, `api_key`, `model` — into any client and your Agent shows up as a virtual model.
+
+| Client | `base_url` | `api_key` | `model` |
+|---|---|---|---|
+| Cherry Studio | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Cursor | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Continue (VS Code / JetBrains) | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+| Zed | `http://localhost:8080/v1` | `sk-soya-…` | `soya:compo` |
+
+> The `model` value is the Agent's `virtual_model_id` declared in its SoyaPack manifest (e.g. `soya:compo`, `soya:news-beam`).
 
 ## Contributing
 

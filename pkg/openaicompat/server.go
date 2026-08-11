@@ -3,9 +3,9 @@
 // It exposes the three endpoints required for "paste base_url and it works"
 // onboarding:
 //
-//   GET  /v1/models                — lists registered Agents as virtual models
-//   POST /v1/chat/completions     — non-stream + SSE streaming
-//   POST /v1/responses            — minimal Responses API (echoes the chat path)
+//	GET  /v1/models                — lists registered Agents as virtual models
+//	POST /v1/chat/completions     — non-stream + SSE streaming
+//	POST /v1/responses            — minimal Responses API (echoes the chat path)
 //
 // Auth is by Bearer token in the canonical "sk-soya-..." format, resolved by
 // pkg/auth. The kernel handles the actual completion.
@@ -28,13 +28,18 @@ import (
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
-	"github.com/soyaos/soyaos/pkg/modelgw"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 // Server is an http.Handler wiring kernel + auth into the /v1/* surface.
 type Server struct {
 	Kernel   *kernel.Kernel
 	Verifier auth.Verifier
+
+	// RowTokens is an optional signer that accepts row-scoped JWTs on the
+	// per-row Action endpoint (DD-019 / APP-503). When nil, only standard
+	// sk-soya keys are accepted.
+	RowTokens *auth.RowTokenSigner
 }
 
 // NewServer constructs a gateway handler.
@@ -48,6 +53,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", s.handleResponses)
+	// SoyaOS superset over the OpenAI surface: GET /v1/agents lists
+	// registered Agents with their descriptions (which /v1/models does not
+	// carry). This gives the embedded Studio — which is served from the
+	// data plane and therefore cannot reach the loopback-only control RPC —
+	// a same-origin agent feed without compromising the control plane
+	// isolation. Exact-path match: the parameterised /v1/agents/{slug}/
+	// actions/{action_id} route below catches anything with a trailing /.
+	mux.HandleFunc("/v1/agents", s.handleAgentList)
+	// Per-row Action trigger (DD-010 / APP-502). The fall-through
+	// "/v1/agents/" prefix catches the parameterised path; the dispatcher
+	// parses {slug} and {action_id} out of the URL.
+	mux.HandleFunc("/v1/agents/", s.handleAgentAction)
 	return mux
 }
 
@@ -101,8 +118,22 @@ type chatReqMessage struct {
 type chatChoice struct {
 	Index        int             `json:"index"`
 	Message      *chatReqMessage `json:"message,omitempty"`
-	Delta        *chatReqMessage `json:"delta,omitempty"`
+	Delta        *chatDelta      `json:"delta,omitempty"`
 	FinishReason *string         `json:"finish_reason"`
+}
+
+// chatDelta is the streaming-only counterpart to chatReqMessage. The OpenAI
+// SSE contract emits `role: "assistant"` only on the FIRST chunk, omits both
+// role and content fields on subsequent chunks (sending only the new content
+// delta), and emits an empty delta `{}` on the final chunk that carries
+// finish_reason. Strict clients (Cherry Studio's Zod validator, the OpenAI
+// Node SDK type guards) reject `role: ""` because the schema's role enum is
+// `["assistant","user","system","tool","developer"]` — empty string is not
+// a member. Keeping all fields as ,omitempty so a zero-value chatDelta
+// marshals to `{}` and only populated fields appear on the wire.
+type chatDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type chatResp struct {
@@ -133,14 +164,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gwReq := modelgw.Request{
+	gwReq := llmcall.Request{
 		Model:       req.Model,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 	}
 	for _, m := range req.Messages {
-		gwReq.Messages = append(gwReq.Messages, modelgw.Message{Role: m.Role, Content: m.Content, Name: m.Name})
+		gwReq.Messages = append(gwReq.Messages, llmcall.Message{Role: m.Role, Content: m.Content, Name: m.Name})
 	}
 
 	if req.Stream {
@@ -167,7 +198,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.Identity, req modelgw.Request) {
+func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.Identity, req llmcall.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAPIError(w, http.StatusInternalServerError, "stream_unsupported", "response writer does not support streaming")
@@ -181,18 +212,20 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 	chunkID := newID("chatcmpl")
 	created := time.Now().Unix()
 
-	out := make(chan modelgw.Chunk, 8)
+	out := make(chan llmcall.Chunk, 8)
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Kernel.ChatCompletionStream(ctx, id, req, out); close(out) }()
 
 	first := true
+	upstreamFinishReason := ""
 	for c := range out {
 		if c.Done {
+			upstreamFinishReason = c.FinishReason
 			break
 		}
-		var role string
+		delta := &chatDelta{Content: c.Delta}
 		if first {
-			role = "assistant"
+			delta.Role = "assistant"
 			first = false
 		}
 		frame := chatResp{
@@ -202,29 +235,61 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, id auth.
 			Model:   req.Model,
 			Choices: []chatChoice{{
 				Index: 0,
-				Delta: &chatReqMessage{Role: role, Content: c.Delta},
+				Delta: delta,
 			}},
 		}
 		if err := writeSSE(w, flusher, frame); err != nil {
 			return
 		}
 	}
-	finish := "stop"
-	tail := chatResp{
-		ID:      chunkID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   req.Model,
-		Choices: []chatChoice{{Index: 0, Delta: &chatReqMessage{}, FinishReason: &finish}},
+
+	// The goroutine closes `out` AFTER writing to errCh, so the err is ready
+	// by the time the loop above exits. Read it before deciding what tail
+	// frame to send: upstream errors must reach the client (via a structured
+	// error frame) instead of being masked by a finish_reason="stop" tail.
+	streamErr := <-errCh
+
+	if streamErr != nil {
+		// Error path: send a structured error frame compatible with OpenAI
+		// streaming conventions (the error object lives at the top level so
+		// SDKs that check `frame.error` see it), then a finish_reason="error"
+		// tail, then [DONE] so well-behaved SSE readers terminate cleanly.
+		_ = writeSSE(w, flusher, map[string]any{
+			"id":      chunkID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   req.Model,
+			"error": map[string]any{
+				"message": streamErr.Error(),
+				"type":    "soyaos_error",
+				"code":    "upstream_stream_error",
+			},
+		})
+		finish := "error"
+		tail := chatResp{
+			ID:      chunkID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   req.Model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
+		}
+		_ = writeSSE(w, flusher, tail)
+	} else {
+		finish := upstreamFinishReason
+		if finish == "" {
+			finish = "stop"
+		}
+		tail := chatResp{
+			ID:      chunkID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   req.Model,
+			Choices: []chatChoice{{Index: 0, Delta: &chatDelta{}, FinishReason: &finish}},
+		}
+		_ = writeSSE(w, flusher, tail)
 	}
-	_ = writeSSE(w, flusher, tail)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
-
-	if err := <-errCh; err != nil {
-		// Stream already started — log via trailer-style data frame.
-		_ = writeSSE(w, flusher, map[string]any{"error": err.Error()})
-	}
 }
 
 // --- Responses API (minimal) ----------------------------------------------
@@ -235,16 +300,16 @@ type respReq struct {
 }
 
 type respResp struct {
-	ID         string           `json:"id"`
-	Object     string           `json:"object"`
-	Model      string           `json:"model"`
-	Output     []respOutputItem `json:"output"`
-	Created    int64            `json:"created"`
+	ID      string           `json:"id"`
+	Object  string           `json:"object"`
+	Model   string           `json:"model"`
+	Output  []respOutputItem `json:"output"`
+	Created int64            `json:"created"`
 }
 
 type respOutputItem struct {
-	Type    string           `json:"type"`    // "message"
-	Role    string           `json:"role"`    // "assistant"
+	Type    string           `json:"type"` // "message"
+	Role    string           `json:"role"` // "assistant"
 	Content []respOutputText `json:"content"`
 }
 
@@ -272,9 +337,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "missing_field", "responses requires model + input")
 		return
 	}
-	gwReq := modelgw.Request{
+	gwReq := llmcall.Request{
 		Model:    req.Model,
-		Messages: []modelgw.Message{{Role: "user", Content: req.Input}},
+		Messages: []llmcall.Message{{Role: "user", Content: req.Input}},
 	}
 	resp, err := s.Kernel.ChatCompletion(r.Context(), id, gwReq)
 	if err != nil {
@@ -360,7 +425,12 @@ const DefaultListenAddr = "127.0.0.1:7474"
 
 // SupportedPaths is the canonical list of HTTP paths this server owns —
 // useful for callers that want to mount it alongside their own routes.
-var SupportedPaths = []string{"/v1/models", "/v1/chat/completions", "/v1/responses"}
+var SupportedPaths = []string{
+	"/v1/models",
+	"/v1/chat/completions",
+	"/v1/responses",
+	"/v1/agents/{slug}/actions/{action_id}",
+}
 
 // PathsString is the SupportedPaths list joined with ", " for human display.
 func PathsString() string { return strings.Join(SupportedPaths, ", ") }

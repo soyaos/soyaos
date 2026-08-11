@@ -1,0 +1,13 @@
+spec_version: comet-image.v0
+name: video-base
+version: 0.1.0
+description: |
+  Comet base image for SilentCut (DD-011). Includes Node 22, Chromium,
+  ffmpeg, Remotion CLI, Noto CJK + Inter fonts. Total target ≤ 800MB.
+base: node:22-bookworm-slim
+cold_start_target_ms: 10000
+memory_min_mib: 1024
+memory_max_mib: 8192
+vcpus_max: 4
+gpus_optional: true
+signed: false  # cosign sign will land with the build pipeline (APP-517)

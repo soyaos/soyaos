@@ -15,14 +15,18 @@ import (
 	"errors"
 )
 
-// Profile names a sandbox image preset. Architecture spec § "Comet 镜像分级"
-// and proposed DD-018.
+// Profile is the runtime isolation axis: process | container | microvm.
+//
+// Spec §3.4 separates the *isolation* tier (this type) from the *image*
+// tier (Task.Image / sandbox.image), which historically rode the same
+// dimension as Profile. The image-preset concept (e.g. "video-base@0.1.0")
+// now lives entirely in Task.Image / SandboxDecl.Image.
 type Profile string
 
 const (
-	ProfileTextOnly  Profile = "text-only"
-	ProfileHTMLBase  Profile = "html-base"
-	ProfileVideoBase Profile = "video-base"
+	ProfileProcess   Profile = "process"
+	ProfileContainer Profile = "container"
+	ProfileMicroVM   Profile = "microvm"
 )
 
 // Task is a single sandboxed invocation.

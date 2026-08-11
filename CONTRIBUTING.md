@@ -42,7 +42,7 @@ Signed-off-by: ...
 
 Common types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`, `build`, `ci`.
 
-Common scopes: `kernel`, `orbit`, `mesh`, `dispatcher`, `memory`, `tooling`, `runtime`, `auth`, `scope`, `modelgw`, `scheduler`, `connectors`, `artifact`, `openaicompat`, `factory`, `sdk`, `cmd`, `deploy`, `docs`, `ci`.
+Common scopes: `kernel`, `orbit`, `mesh`, `dispatcher`, `memory`, `tooling`, `runtime`, `auth`, `scope`, `llmcall`, `scheduler`, `connectors`, `artifact`, `openaicompat`, `factory`, `sdk`, `cmd`, `deploy`, `docs`, `ci`.
 
 ## Local development
 

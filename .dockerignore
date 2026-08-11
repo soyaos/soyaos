@@ -1,0 +1,21 @@
+# Keep the build context small and free of host-only state.
+# Anything matched here is invisible to `docker build`.
+
+# VCS metadata (use --build-arg GITSHA=... instead of leaking .git).
+.git/
+
+# Pre-built binaries from local `make build`.
+bin/
+
+# Studio dev sourcemaps — embedded assets ship without them.
+internal/studio/dist/*.map
+
+# Local secrets (these should never be in git, belt-and-suspenders).
+.env
+.env.*
+
+# bbolt / boltdb on-disk state from local dev runs.
+*.bolt
+
+# Frontend deps (we re-fetch inside the builder if/when needed).
+node_modules/

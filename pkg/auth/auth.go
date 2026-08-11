@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -78,20 +79,28 @@ func NewMemoryStore() *MemoryStore {
 // SeedDevKey registers the dev-time bootstrap key `sk-soya-dev-local` so the
 // Solo quickstart works without setup. Returns the key it registered.
 //
-// This key must never be used outside local development; production deployments
-// should call Mint() and rotate.
+// Spec §5.1 forbids fail-open: the seeded identity is scoped narrowly to
+// `agents:invoke` + `agents:list` and stamped with KeyID "unsafe-dev-local"
+// so audit trails and tests can recognise it. This key must never be used
+// outside local development; production deployments should call Mint() and
+// rotate.
 func (s *MemoryStore) SeedDevKey() string {
+	log.Println("auth: SeedDevKey active — unsafe-dev-local identity, FOR LOCAL DEV ONLY")
 	const devKey = KeyPrefix + "dev-local"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keys[devKey] = Identity{
-		KeyID:    "dev-local",
+		KeyID:    "unsafe-dev-local",
 		Subject:  "local",
 		IssuedAt: time.Now(),
-		Scopes:   []string{"*"},
+		Scopes:   []string{"agents:invoke", "agents:list"},
 	}
 	return devKey
 }
+
+// ScopeAll returns the wildcard scope. INTERNAL USE ONLY — used by trusted
+// control-plane callers, never persisted to dev keys.
+func ScopeAll() []string { return []string{"*"} }
 
 // Mint generates a fresh key with the given subject, scopes, and TTL.
 // ttl == 0 means no expiry.

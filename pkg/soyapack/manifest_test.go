@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -167,6 +168,167 @@ func TestValidate_AgentRequiresEntryAndExpose(t *testing.T) {
 	}
 }
 
+// --- prompt.steps[] (APP-550 Compo Phase B) ---------------------------------
+
+func TestValidate_PromptSteps_AcceptedAsAlternativeToEntry(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Entry = ""
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{
+			{ID: "analyze", Prompt: "prompts/analyze.md"},
+			{ID: "generate", Prompt: "prompts/generate.md"},
+		},
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(prompt.steps only) = %v, want nil", err)
+	}
+}
+
+func TestValidate_PromptSteps_MutuallyExclusiveWithEntry(t *testing.T) {
+	m := minimalAgentManifest() // already has Entry set
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{{ID: "a", Prompt: "prompts/a.md"}},
+	}
+	err := soyapack.Validate(m)
+	if err == nil {
+		t.Fatal("Validate(entry + prompt.steps) returned nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusion, got %v", err)
+	}
+}
+
+func TestValidate_PromptSteps_RejectsMissingFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []soyapack.PromptStep
+	}{
+		{"missing id", []soyapack.PromptStep{{Prompt: "prompts/a.md"}}},
+		{"missing prompt", []soyapack.PromptStep{{ID: "x"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := minimalAgentManifest()
+			m.Entry = ""
+			m.Prompt = &soyapack.Prompt{Steps: c.steps}
+			if err := soyapack.Validate(m); err == nil {
+				t.Fatal("Validate returned nil")
+			}
+		})
+	}
+}
+
+func TestValidate_PromptSteps_RejectsDuplicateID(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Entry = ""
+	m.Prompt = &soyapack.Prompt{
+		Steps: []soyapack.PromptStep{
+			{ID: "x", Prompt: "a.md"},
+			{ID: "x", Prompt: "b.md"},
+		},
+	}
+	if err := soyapack.Validate(m); err == nil {
+		t.Fatal("Validate(duplicate step id) returned nil")
+	}
+}
+
+// --- channels[].secrets (APP-552 NewsBeam) ----------------------------------
+
+func TestValidate_ChannelSecrets_AcceptsEnvRef(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Channels = []soyapack.ChannelDecl{{
+		Kind:      "dingtalk",
+		BindingID: "news-beam-test",
+		Secrets: map[string]string{
+			"access_token_ref": "${SOYA_DINGTALK_ACCESS_TOKEN}",
+			"secret_ref":       "${SOYA_DINGTALK_SECRET}",
+		},
+	}}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(channel with env-ref secrets) = %v, want nil", err)
+	}
+}
+
+func TestValidate_ChannelSecrets_RejectsInline(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Channels = []soyapack.ChannelDecl{{
+		Kind:    "dingtalk",
+		Secrets: map[string]string{"access_token_ref": "tk-deadbeef"},
+	}}
+	if err := soyapack.Validate(m); err == nil {
+		t.Fatal("Validate(inline channel secret) returned nil")
+	}
+}
+
+func TestLoad_PromptStepsRoundTrip(t *testing.T) {
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: chained
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+expose: { openai_compat: chat, virtual_model_id: soya:chained }
+prompt:
+  steps:
+    - { id: analyze, prompt: prompts/analyze.md }
+    - { id: generate, prompt: prompts/generate.md }
+    - { id: refine, prompt: prompts/refine.md }
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if m.Prompt == nil || len(m.Prompt.Steps) != 3 {
+		t.Fatalf("steps not parsed: prompt=%+v", m.Prompt)
+	}
+	if m.Prompt.Steps[1].ID != "generate" || m.Prompt.Steps[1].Prompt != "prompts/generate.md" {
+		t.Errorf("steps[1] = %+v", m.Prompt.Steps[1])
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(chained) = %v", err)
+	}
+}
+
+func TestLoad_ChannelsWithSecretsRoundTrip(t *testing.T) {
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: pushy
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+entry: prompts/main.md
+expose: { openai_compat: chat, virtual_model_id: soya:pushy }
+channels:
+  - kind: dingtalk
+    binding_id: my-robot
+    secrets:
+      access_token_ref: ${SOYA_DINGTALK_ACCESS_TOKEN}
+      secret_ref: ${SOYA_DINGTALK_SECRET}
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if len(m.Channels) != 1 {
+		t.Fatalf("channels not parsed: %+v", m.Channels)
+	}
+	if m.Channels[0].BindingID != "my-robot" {
+		t.Errorf("binding_id = %q", m.Channels[0].BindingID)
+	}
+	if m.Channels[0].Secrets["access_token_ref"] != "${SOYA_DINGTALK_ACCESS_TOKEN}" {
+		t.Errorf("secrets[access_token_ref] = %q", m.Channels[0].Secrets["access_token_ref"])
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(channels) = %v", err)
+	}
+}
+
 func TestValidate_RejectsBadVirtualModelID(t *testing.T) {
 	bad := []string{"openai/gpt-4", "Soya:x", "soya:BAD_CASE", ""}
 	for _, vid := range bad {
@@ -195,6 +357,134 @@ func TestValidate_ScheduleRequiresCronOrOnce(t *testing.T) {
 	if err := soyapack.Validate(m); err == nil {
 		t.Fatal("Validate(schedule without cron/once) returned nil")
 	}
+}
+
+func TestValidate_PromptUpstream_Valid(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{
+		Upstream: &soyapack.UpstreamDecl{
+			Provider:  "openai-compat",
+			BaseURL:   "https://api.deepseek.com/v1",
+			Model:     "deepseek-chat",
+			APIKeyRef: "${SOYA_MODEL_API_KEY}",
+		},
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(valid upstream) = %v, want nil", err)
+	}
+}
+
+func TestValidate_PromptUpstream_RejectsUnsupportedProvider(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{
+		Upstream: &soyapack.UpstreamDecl{Provider: "anthropic"},
+	}
+	err := soyapack.Validate(m)
+	if err == nil {
+		t.Fatal("Validate(unsupported provider) returned nil")
+	}
+	if !errors.Is(err, soyapack.ErrUnsupportedProvider) {
+		t.Fatalf("error must wrap ErrUnsupportedProvider, got %v", err)
+	}
+}
+
+func TestValidate_PromptUpstream_RejectsBadAPIKeyRef(t *testing.T) {
+	bad := []string{
+		"sk-deadbeef",       // inline secret form
+		"$ENV_NAME",         // missing braces
+		"${lowercase}",      // lower-case not allowed
+		"${1LEADING_DIGIT}", // must start with letter or underscore
+		"${MY-DASH}",        // dash not allowed
+		"${}",               // empty name
+	}
+	for _, ref := range bad {
+		m := minimalAgentManifest()
+		m.Prompt = &soyapack.Prompt{
+			Upstream: &soyapack.UpstreamDecl{Provider: "openai-compat", APIKeyRef: ref},
+		}
+		err := soyapack.Validate(m)
+		if err == nil {
+			t.Fatalf("Validate(api_key_ref=%q) returned nil", ref)
+		}
+		if !errors.Is(err, soyapack.ErrBadAPIKeyRef) {
+			t.Fatalf("api_key_ref=%q: error must wrap ErrBadAPIKeyRef, got %v", ref, err)
+		}
+	}
+}
+
+func TestValidate_PromptUpstream_NilOK(t *testing.T) {
+	m := minimalAgentManifest()
+	m.Prompt = &soyapack.Prompt{Scaffold: "minimal-input-high-quality"}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(no upstream) = %v, want nil", err)
+	}
+	m = minimalAgentManifest()
+	m.Prompt = nil
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate(no prompt) = %v, want nil", err)
+	}
+}
+
+func TestLoad_PromptUpstream_NoInlineAPIKeyField(t *testing.T) {
+	// Defense-in-depth: the typed UpstreamDecl struct has no `APIKey` field,
+	// so even if yaml.v3's lenient nested decode silently drops an
+	// `api_key:` line, the manifest can never surface an inline secret to
+	// runtime code. This test pins that surface — a future contributor
+	// adding `APIKey` to UpstreamDecl would have to rip out this assertion.
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: leaky
+version: 0.1.0
+description: x
+authors: [{name: a}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: read-only
+entry: prompts/main.md
+expose: { openai_compat: chat, virtual_model_id: soya:leaky }
+prompt:
+  upstream:
+    provider: openai-compat
+    api_key_ref: ${SOYA_MODEL_API_KEY}
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if m.Prompt == nil || m.Prompt.Upstream == nil {
+		t.Fatal("expected prompt.upstream to be populated")
+	}
+	if m.Prompt.Upstream.APIKeyRef != "${SOYA_MODEL_API_KEY}" {
+		t.Fatalf("api_key_ref = %q", m.Prompt.Upstream.APIKeyRef)
+	}
+	// Sanity-check the struct surface stays ref-only by reflecting on
+	// declared fields — the only way to leak inline secrets would be to
+	// add a new typed field here.
+	if got := reflectFieldNames(*m.Prompt.Upstream); !containsAll(got, []string{"Provider", "BaseURL", "Model", "APIKeyRef"}) || len(got) != 4 {
+		t.Fatalf("UpstreamDecl fields drifted: %v (must be exactly 4 ref-only fields)", got)
+	}
+}
+
+func reflectFieldNames(v any) []string {
+	t := reflect.TypeOf(v)
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		out = append(out, t.Field(i).Name)
+	}
+	return out
+}
+
+func containsAll(haystack, needles []string) bool {
+	set := map[string]bool{}
+	for _, h := range haystack {
+		set[h] = true
+	}
+	for _, n := range needles {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // minimalAgentManifest returns the smallest manifest that should pass

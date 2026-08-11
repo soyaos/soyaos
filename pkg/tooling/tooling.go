@@ -73,3 +73,14 @@ func (r *Registry) Invoke(ctx context.Context, name string, input map[string]any
 	}
 	return t.Handler(ctx, input)
 }
+
+// RegisterAll bulk-registers the supplied tools. The builtin packages
+// (pkg/tooling/tools/...) wire themselves into the kernel through this
+// helper so the registry never has to import the leaf tool packages
+// (which would create an import cycle once tools reference back into
+// the registry for sub-tool composition).
+func (r *Registry) RegisterAll(tools ...Tool) {
+	for _, t := range tools {
+		r.Register(t)
+	}
+}

@@ -58,18 +58,19 @@ type Manifest struct {
 	Signatures  []Signature   `yaml:"signatures,omitempty" json:"signatures,omitempty"`
 
 	// Agent-specific (also valid in Skill subsets)
-	Entry     string         `yaml:"entry,omitempty" json:"entry,omitempty"`
-	Expose    *Expose        `yaml:"expose,omitempty" json:"expose,omitempty"`
-	Inputs    []Input        `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	Outputs   []any          `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-	Prompt    *Prompt        `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Artifacts []ArtifactDecl `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	Schedules []ScheduleDecl `yaml:"schedules,omitempty" json:"schedules,omitempty"`
-	Channels  []ChannelDecl  `yaml:"channels,omitempty" json:"channels,omitempty"`
-	Actions   []ActionDecl   `yaml:"actions,omitempty" json:"actions,omitempty"`
-	State     *StateDecl     `yaml:"state,omitempty" json:"state,omitempty"`
-	Sandbox   *SandboxDecl   `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
-	Uses      []string       `yaml:"uses,omitempty" json:"uses,omitempty"`
+	Entry      string           `yaml:"entry,omitempty" json:"entry,omitempty"`
+	Expose     *Expose          `yaml:"expose,omitempty" json:"expose,omitempty"`
+	Inputs     []Input          `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Outputs    []any            `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Prompt     *Prompt          `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Artifacts  []ArtifactDecl   `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	Schedules  []ScheduleDecl   `yaml:"schedules,omitempty" json:"schedules,omitempty"`
+	Channels   []ChannelDecl    `yaml:"channels,omitempty" json:"channels,omitempty"`
+	Actions    []ActionDecl     `yaml:"actions,omitempty" json:"actions,omitempty"`
+	State      *StateDecl       `yaml:"state,omitempty" json:"state,omitempty"`
+	StorageNAS []StorageNASDecl `yaml:"storage_nas,omitempty" json:"storage_nas,omitempty"`
+	Sandbox    *SandboxDecl     `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
+	Uses       []string         `yaml:"uses,omitempty" json:"uses,omitempty"`
 
 	// Skill-specific
 	Capabilities *Capabilities `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
@@ -127,9 +128,43 @@ type Input struct {
 }
 
 // Prompt holds prompt-scaffolding hints.
+//
+// Two prompt-body shapes are supported and mutually exclusive with
+// the top-level `entry`:
+//
+//   - `entry` (top-level) — single system prompt file (the v0 default).
+//   - `prompt.steps[]`    — ordered chain of N prompt files; each step's
+//     full response is fed as the user input of the next. The kernel
+//     streams only the final step back to the caller. (APP-550 Compo
+//     Phase B)
 type Prompt struct {
-	Scaffold string   `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
-	Tools    []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Scaffold string        `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
+	Tools    []string      `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Steps    []PromptStep  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Upstream *UpstreamDecl `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+}
+
+// PromptStep is one stage in a `prompt.steps[]` chain. Prompt is a path
+// relative to the Pack root; ID is a short stable handle used in logs
+// and trace spans so operators can pin which stage failed.
+type PromptStep struct {
+	ID     string `yaml:"id" json:"id"`
+	Prompt string `yaml:"prompt" json:"prompt"`
+}
+
+// UpstreamDecl is the per-Agent BYOK upstream override declared under
+// `prompt.upstream`. When set, it wins over the operator-level
+// SOYA_MODEL_* env vars at dispatch time; see pkg/llmcall.ResolveConfig.
+//
+// Inline secrets are forbidden: APIKeyRef must be of the form ${ENV_NAME}
+// referencing an environment variable on the SoyaOS host. The strict YAML
+// decoder rejects unknown fields under this struct, so a literal
+// `api_key:` line in soyapack.yaml fails to load. (APP-543)
+type UpstreamDecl struct {
+	Provider  string `yaml:"provider" json:"provider"`
+	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	Model     string `yaml:"model,omitempty" json:"model,omitempty"`
+	APIKeyRef string `yaml:"api_key_ref,omitempty" json:"api_key_ref,omitempty"`
 }
 
 // ArtifactDecl declares an output form. (Proposed DD-012.)
@@ -149,9 +184,23 @@ type ScheduleDecl struct {
 }
 
 // ChannelDecl binds the Agent to an external channel (DD-006).
+//
+// Two forms coexist for alpha:
+//
+//   - BindingTemplate: a free-form placeholder filled at deploy time
+//     (the original v0 shape; kept for forward compat).
+//   - BindingID + Secrets: a deploy-time-locked binding plus an
+//     env-var-ref secret map. Used by NewsBeam (APP-552) so a Pack
+//     can declare *which* DingTalk robot it pushes to without
+//     embedding creds in the manifest.
+//
+// Secret values must be of the form `${ENV_NAME}`; inline secrets are
+// forbidden by Validate.
 type ChannelDecl struct {
-	Kind            string `yaml:"kind" json:"kind"`
-	BindingTemplate string `yaml:"binding_template,omitempty" json:"binding_template,omitempty"`
+	Kind            string            `yaml:"kind" json:"kind"`
+	BindingTemplate string            `yaml:"binding_template,omitempty" json:"binding_template,omitempty"`
+	BindingID       string            `yaml:"binding_id,omitempty" json:"binding_id,omitempty"`
+	Secrets         map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // ActionDecl describes a row / button / api action trigger (DD-010).
@@ -181,10 +230,16 @@ type SandboxDecl struct {
 // Capabilities is the default-deny capability declaration. Mirrors
 // specs/soyapack/v0/capabilities.md. Implementation enforcement lives in
 // pkg/runtime.Gate; this type only carries the declaration.
+//
+// R0 P0 fail-closed triad: NetworkOut + FSRead + FSWrite + Exec form the
+// minimum gate surface; anything not listed here must be denied at the
+// runtime layer. Exec restricts which argv[0] entries the sandbox may
+// invoke (Stage 5 will enforce; see DeniedError.Capability="exec").
 type Capabilities struct {
 	NetworkOut      []EgressRule   `yaml:"network_out,omitempty" json:"network_out,omitempty"`
 	FSRead          []string       `yaml:"fs_read,omitempty" json:"fs_read,omitempty"`
 	FSWrite         []string       `yaml:"fs_write,omitempty" json:"fs_write,omitempty"`
+	Exec            []string       `yaml:"exec,omitempty" json:"exec,omitempty"`
 	Syscalls        []string       `yaml:"syscalls,omitempty" json:"syscalls,omitempty"`
 	LLM             *LLMCapability `yaml:"llm,omitempty" json:"llm,omitempty"`
 	MCPTools        []string       `yaml:"mcp_tools,omitempty" json:"mcp_tools,omitempty"`
@@ -206,11 +261,11 @@ type EgressRule struct {
 
 // LLMCapability bounds the LLM calls a Pack may make.
 type LLMCapability struct {
-	Model         string       `yaml:"model,omitempty" json:"model,omitempty"`
-	Temperature   *FloatBounds `yaml:"temperature,omitempty" json:"temperature,omitempty"`
-	MaxTokens     int          `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	QuotaPerCall  int          `yaml:"quota_per_call,omitempty" json:"quota_per_call,omitempty"`
-	QuotaPerDay   int          `yaml:"quota_per_day,omitempty" json:"quota_per_day,omitempty"`
+	Model        string       `yaml:"model,omitempty" json:"model,omitempty"`
+	Temperature  *FloatBounds `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	MaxTokens    int          `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	QuotaPerCall int          `yaml:"quota_per_call,omitempty" json:"quota_per_call,omitempty"`
+	QuotaPerDay  int          `yaml:"quota_per_day,omitempty" json:"quota_per_day,omitempty"`
 }
 
 // FloatBounds is a closed range [Min, Max].
@@ -225,16 +280,49 @@ type MemoryMount struct {
 	Access string `yaml:"access" json:"access"` // ro / rw
 }
 
-// NASMount declares a NAS storage target (DD-011).
+// NASMount declares a NAS storage target referenced by a capability
+// allowlist. Kept for the legacy `sandbox.capabilities.storage_nas`
+// surface; new code should prefer the top-level `storage_nas:` block
+// (StorageNASDecl) which carries the protocol-specific connection
+// details Comet needs to actually write the artifact.
 type NASMount struct {
 	Kind   string `yaml:"kind" json:"kind"` // smb / nfs / webdav / s3
 	Mount  string `yaml:"mount" json:"mount"`
 	Access string `yaml:"access" json:"access"` // ro / rw
 }
 
+// StorageNASDecl is one entry under the top-level `storage_nas:` block
+// (DD-011 SilentCut). Where NASMount only names a capability slot,
+// StorageNASDecl carries the full connection recipe the kernel hands
+// to Comet's NAS connector layer:
+//
+//   - Protocol — one of "smb", "nfs", "webdav", "s3"; the four
+//     pkg/connectors/nas drivers ride here.
+//   - HostRef  — the network address. Must be of the form ${ENV_NAME}
+//     so the operator's deployment env supplies it; inline hosts are
+//     allowed (no secret leak risk) but the SilentCut alpha
+//     recommendation is to keep them in env so the manifest is
+//     deploy-environment-agnostic.
+//   - Share    — protocol-specific path inside HostRef (SMB share
+//     name, NFS export path, WebDAV root, S3 bucket).
+//   - Access   — "ro" / "rw".
+//   - Secrets  — env-var refs ({"username_ref": "${SOYA_NAS_USER}", ...}).
+//     The same ${ENV_NAME} rule that governs channels.secrets[*]
+//     governs these.
+//   - ID       — optional stable identifier so multiple NAS targets
+//     can coexist; defaults to "primary" when omitted.
+type StorageNASDecl struct {
+	ID       string            `yaml:"id,omitempty" json:"id,omitempty"`
+	Protocol string            `yaml:"protocol" json:"protocol"`
+	HostRef  string            `yaml:"host_ref" json:"host_ref"`
+	Share    string            `yaml:"share" json:"share"`
+	Access   string            `yaml:"access,omitempty" json:"access,omitempty"`
+	Secrets  map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+}
+
 // Resources caps the compute budget per Pack invocation.
 type Resources struct {
-	CPU      int `yaml:"cpu,omitempty" json:"cpu,omitempty"`           // vCPU
+	CPU      int `yaml:"cpu,omitempty" json:"cpu,omitempty"` // vCPU
 	RAMMB    int `yaml:"ram_mb,omitempty" json:"ram_mb,omitempty"`
 	TimeoutS int `yaml:"timeout_s,omitempty" json:"timeout_s,omitempty"`
 	GPU      int `yaml:"gpu,omitempty" json:"gpu,omitempty"`
@@ -294,6 +382,7 @@ var knownTopLevelFields = map[string]struct{}{
 	"channels":     {},
 	"actions":      {},
 	"state":        {},
+	"storage_nas":  {},
 	"sandbox":      {},
 	"uses":         {},
 	"capabilities": {},

@@ -34,10 +34,11 @@ const (
 //
 // Output is A4, with background colors preserved and no header / footer.
 type PDFRenderer struct {
-	Template   string        // forwarded to HTMLRenderer
-	Schema     string        // artifact schema id (e.g. "guide.v1")
-	ChromePath string        // optional explicit chrome binary; empty = auto-detect
-	Timeout    time.Duration // default 30s if zero
+	Template       string        // forwarded to HTMLRenderer
+	Schema         string        // artifact schema id (e.g. "guide.v1")
+	ChromePath     string        // optional explicit chrome binary; empty = auto-detect
+	Timeout        time.Duration // default 30s if zero
+	DisableSandbox bool          // opt-in for restricted CI/container environments only
 }
 
 // Kind reports KindPDF; PDFRenderer is the canonical renderer for the
@@ -97,6 +98,9 @@ func (r PDFRenderer) Render(ctx context.Context, snapshot any, dst io.Writer) (A
 
 	allocOpts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	allocOpts = append(allocOpts, chromedp.ExecPath(chromePath))
+	if r.DisableSandbox {
+		allocOpts = append(allocOpts, chromedp.NoSandbox)
+	}
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(runCtx, allocOpts...)
 	defer cancelAlloc()

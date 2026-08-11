@@ -64,10 +64,10 @@ type Outbound interface {
 
 // Registry tracks the inbound and outbound adapters known to this process.
 type Registry struct {
-	mu        sync.RWMutex
-	inbound   map[Kind]Inbound
-	outbound  map[Kind]Outbound
-	bindings  map[string]Binding
+	mu       sync.RWMutex
+	inbound  map[Kind]Inbound
+	outbound map[Kind]Outbound
+	bindings map[string]Binding
 }
 
 // Binding ties a specific external account / webhook / cred-set to a Kind.

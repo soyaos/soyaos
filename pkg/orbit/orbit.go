@@ -31,6 +31,8 @@ type Node struct {
 	Role       Role      // planet / moon / comet
 	StartedAt  time.Time // process boot time for this role
 	HostsComet bool      // true when this node is willing to host Comet tasks
+	// HostsAgent indicates this node can host Agent workloads. Symmetric to HostsComet.
+	HostsAgent bool
 }
 
 // Registry is the in-process map of active node roles. In Solo mode it holds
@@ -73,8 +75,10 @@ func (r *Registry) List() []Node {
 //
 // HostsComet is set on the Comet node — task scheduling will route Comet
 // jobs to it. Planet and Moon do not host Comet tasks by default in Solo.
+// HostsAgent is set on all three nodes in Solo mode, since the same process
+// hosts every role and is therefore willing to host Agent workloads as well.
 func (r *Registry) SeedSolo(now time.Time) {
-	r.Register(Node{ID: "planet-local", Role: RolePlanet, StartedAt: now})
-	r.Register(Node{ID: "moon-local", Role: RoleMoon, StartedAt: now})
-	r.Register(Node{ID: "comet-local", Role: RoleComet, StartedAt: now, HostsComet: true})
+	r.Register(Node{ID: "planet-local", Role: RolePlanet, StartedAt: now, HostsAgent: true})
+	r.Register(Node{ID: "moon-local", Role: RoleMoon, StartedAt: now, HostsAgent: true})
+	r.Register(Node{ID: "comet-local", Role: RoleComet, StartedAt: now, HostsComet: true, HostsAgent: true})
 }
