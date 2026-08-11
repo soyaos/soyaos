@@ -213,7 +213,7 @@ jobs:
           set -euo pipefail
           output="$(docker run --rm --platform linux/amd64 "ghcr.io/soyaos/soyaos:${RELEASE_TAG}" version)"
           printf '%s\n' "${output}"
-          grep -F "soyaos ${RELEASE_TAG} " <<<"${output}"
+          grep -Fx "soyaos ${RELEASE_TAG}" <<<"$(head -n 1 <<<"${output}")"
 
   publish-assets:
     name: sign and attach release assets
