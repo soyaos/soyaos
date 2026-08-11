@@ -1,117 +1,275 @@
 # Owner: release-eng
-# Purpose: Sigstore keyless sign all release assets with cosign sign-blob
-# Trigger: release published, or manual workflow_dispatch
-# Notes: Requires GITHUB_TOKEN (auto). OIDC id-token used for cosign keyless.
+# Purpose: Build, publish and verify every artifact for one GitHub Release.
+# release-please calls this reusable workflow directly after creating a release.
 
 name: release
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to publish
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to publish
+        required: true
+        type: string
   release:
     types: [published]
-  workflow_dispatch: {}
 
 permissions:
   contents: write
+  packages: write
   id-token: write
 
+concurrency:
+  group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  sign-artifacts:
-    name: cosign sign-blob (keyless)
+  validate:
+    name: validate release target
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Validate tag and release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          gh release view "${RELEASE_TAG}" >/dev/null
+          echo "tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+  build-binaries:
+    name: binary ${{ matrix.os }}/${{ matrix.arch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          - os: windows
+            arch: arm64
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          extension=""
+          if [ "${GOOS}" = "windows" ]; then extension=".exe"; fi
+          git_sha="$(git rev-parse --short=12 HEAD)"
+          output="dist/soyaos-${GOOS}-${GOARCH}${extension}"
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X github.com/soyaos/soyaos/pkg/version.Version=${RELEASE_TAG} -X github.com/soyaos/soyaos/pkg/version.GitSHA=${git_sha}" \
+            -tags edition_solo \
+            -o "${output}" \
+            ./cmd/soyaos
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/soyaos-*
+          if-no-files-found: error
+          retention-days: 14
+
+  generate-sbom:
+    name: generate SPDX and CycloneDX SBOMs
+    needs: validate
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate SBOM documents
+        run: |
+          jq -e '.spdxVersion | type == "string" and length > 0' sbom.spdx.json >/dev/null
+          jq -e '.bomFormat == "CycloneDX"' sbom.cdx.json >/dev/null
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-sbom
+          path: |
+            sbom.spdx.json
+            sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+  build-image:
+    name: build, push and sign container image
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: image
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tags="ghcr.io/soyaos/soyaos:${RELEASE_TAG}"
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            tags="${tags},ghcr.io/soyaos/soyaos:latest"
+          fi
+          echo "tags=${tags}" >> "${GITHUB_OUTPUT}"
+          echo "git-sha=$(git rev-parse --short=12 HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push multi-architecture image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          provenance: true
+          sbom: false
+          build-args: |
+            VERSION=${{ needs.validate.outputs.tag }}
+            GITSHA=${{ steps.image.outputs.git-sha }}
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Download release assets
+      - name: Sign image digest with Sigstore keyless
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dist
-          # alpha: use gh release download for the current tag
-          gh release download "${{ github.ref_name }}" -D dist/ || {
-            echo "No release assets found for ${{ github.ref_name }}; nothing to sign."
-            exit 0
-          }
-          ls -la dist/
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/soyaos/soyaos@${DIGEST}"
 
-      - name: Sign each artifact (keyless)
-        env:
-          COSIGN_EXPERIMENTAL: '1'
-        run: |
-          shopt -s nullglob
-          for f in dist/*; do
-            [ -f "${f}" ] || continue
-            case "${f}" in
-              *.sig|*.cert|*.pem) continue ;;
-            esac
-            echo "Signing ${f}"
-            cosign sign-blob \
-              --yes \
-              --output-signature "${f}.sig" \
-              --output-certificate "${f}.cert" \
-              "${f}"
-          done
+  publish-assets:
+    name: sign and attach release assets
+    needs: [validate, build-binaries, generate-sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries and SBOMs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
 
-      - name: Upload signatures back to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          uploads=(dist/*.sig dist/*.cert)
-          if [ ${#uploads[@]} -gt 0 ]; then
-            gh release upload "${{ github.ref_name }}" "${uploads[@]}" --clobber
-          else
-            echo "No signature artifacts to upload."
-          fi
-
-      - name: Release notes verification (step summary)
-        run: |
-          {
-            echo "## Release notes verification"
-            echo ""
-            echo "Each release asset is signed with Sigstore keyless cosign."
-            echo "Verify with:"
-            echo ""
-            echo '```sh'
-            echo "cosign verify-blob \\"
-            echo "  --certificate <asset>.cert \\"
-            echo "  --signature   <asset>.sig \\"
-            echo "  --certificate-identity-regexp 'https://github.com/soyaos/soyaos/' \\"
-            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
-            echo "  <asset>"
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Append verify-blob hint to release body
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+      - name: Validate downloaded assets
         run: |
           set -euo pipefail
-          # gh release edit replaces the body wholesale, so we read it first
-          # and append our verify-blob hint to a tmp file, then write back.
-          current_body="$(gh release view "${TAG}" --json body --jq .body)"
-          # Idempotency: only append if the hint is not already in the body.
-          if printf '%s' "${current_body}" | grep -qF "Verify release assets"; then
-            echo "verify-blob hint already present in release body; skipping append."
+          test "$(find dist -maxdepth 1 -type f -name 'soyaos-*' | wc -l | tr -d ' ')" -eq 5
+          jq -e '.spdxVersion | type == "string" and length > 0' dist/sbom.spdx.json >/dev/null
+          jq -e '.bomFormat == "CycloneDX"' dist/sbom.cdx.json >/dev/null
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign and verify every asset
+        run: |
+          set -euo pipefail
+          for asset in dist/soyaos-* dist/sbom.spdx.json dist/sbom.cdx.json; do
+            cosign sign-blob \
+              --yes \
+              --output-signature "${asset}.sig" \
+              --output-certificate "${asset}.cert" \
+              "${asset}"
+            cosign verify-blob \
+              --certificate "${asset}.cert" \
+              --signature "${asset}.sig" \
+              --certificate-identity-regexp '^https://github.com/soyaos/soyaos/.+' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${asset}"
+          done
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release upload "${RELEASE_TAG}" dist/* --clobber
+
+      - name: Add verification instructions to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          current_body="$(gh release view "${RELEASE_TAG}" --json body --jq .body)"
+          if printf '%s' "${current_body}" | grep -qF 'Verify release assets'; then
             exit 0
           fi
           {
             printf '%s\n\n' "${current_body}"
-            printf '%s\n' "---"
+            printf '%s\n' '---'
             printf '\n### Verify release assets\n\n'
-            printf 'Each release asset is signed with Sigstore keyless cosign. Verify any asset:\n\n'
-            printf '```sh\n'
-            printf 'cosign verify-blob \\\n'
-            printf '  --certificate <asset>.cert \\\n'
-            printf '  --signature   <asset>.sig \\\n'
-            printf "  --certificate-identity-regexp 'https://github.com/soyaos/soyaos/' \\\\\n"
-            printf '  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\\n'
-            printf '  <asset>\n'
+            printf '%s\n' 'Every binary and SBOM is signed with Sigstore keyless cosign:'
+            printf '\n```sh\n'
+            printf '%s\n' 'cosign verify-blob --certificate <asset>.cert --signature <asset>.sig \'
+            printf "%s\n" "  --certificate-identity-regexp '^https://github.com/soyaos/soyaos/.+' \\"
+            printf '%s\n' '  --certificate-oidc-issuer https://token.actions.githubusercontent.com <asset>'
             printf '```\n'
-          } > /tmp/body.md
-          gh release edit "${TAG}" --notes-file /tmp/body.md
+          } > /tmp/soyaos-release-body.md
+          gh release edit "${RELEASE_TAG}" --notes-file /tmp/soyaos-release-body.md

@@ -1,14 +1,13 @@
 # Owner: release-eng
 # Purpose: Cross-compile soyaos for 6 editions × 5 platforms (solo subset active in alpha)
-# Trigger: push to main/master, v* tags, pull_request, manual
+# Trigger: push to main, pull_request, manual. Release assets are built by release.yml.
 # Notes: Requires GITHUB_TOKEN (auto). Drop the `solo`-only `if` to activate full matrix.
 
 name: matrix-build
 
 on:
   push:
-    branches: [main, master]
-    tags: ['v*']
+    branches: [main]
   pull_request: {}
   workflow_dispatch: {}
 
