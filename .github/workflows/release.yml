@@ -47,7 +47,7 @@ jobs:
             echo "Invalid release tag: ${RELEASE_TAG}" >&2
             exit 1
           fi
-          gh release view "${RELEASE_TAG}" >/dev/null
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null
           echo "tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
 
   build-binaries:
@@ -249,7 +249,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-        run: gh release upload "${RELEASE_TAG}" dist/* --clobber
+        run: gh release upload "${RELEASE_TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
 
       - name: Add verification instructions to release notes
         env:
@@ -257,7 +257,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          current_body="$(gh release view "${RELEASE_TAG}" --json body --jq .body)"
+          current_body="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body)"
           if printf '%s' "${current_body}" | grep -qF 'Verify release assets'; then
             exit 0
           fi
@@ -272,4 +272,4 @@ jobs:
             printf '%s\n' '  --certificate-oidc-issuer https://token.actions.githubusercontent.com <asset>'
             printf '```\n'
           } > /tmp/soyaos-release-body.md
-          gh release edit "${RELEASE_TAG}" --notes-file /tmp/soyaos-release-body.md
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --notes-file /tmp/soyaos-release-body.md
