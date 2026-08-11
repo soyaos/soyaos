@@ -23,9 +23,9 @@ The v0.1.0 milestone is locked to four flagship user stories (DD-008 ~ DD-011):
 | # | Agent | Persona | Aha Moment |
 |---|---|---|---|
 | DD-008 | **Compo** ([reference repo](https://github.com/soyaos/example-essay-tutor)) | Parents tutoring kids | One sample essay + title → printable PDF writing guide |
-| DD-009 | **NewsBeam** | AI knowledge workers | One sentence → daily 9am AI news long-image to DingTalk |
-| DD-010 | **EstateMuse** | Real-estate creators | One sentence → 500 topic ideas in Excel, per-row "generate post/video" actions |
-| DD-011 | **SilentCut** | Solo video creators | NL → Remotion script → Comet renders → MP4 lands on your NAS |
+| DD-009 | **NewsBeam** ([reference repo](https://github.com/soyaos/example-news-beam)) | AI knowledge workers | One sentence → daily 9am AI news long-image to DingTalk |
+| DD-010 | **EstateMuse** ([reference repo](https://github.com/soyaos/example-estate-muse)) | Real-estate creators | One sentence → 500 topic ideas in Excel, per-row "generate post/video" actions |
+| DD-011 | **SilentCut** ([reference repo](https://github.com/soyaos/example-silent-cut)) | Solo video creators | NL → Remotion script → Comet renders → MP4 lands on your NAS |
 
 When all four stories run end-to-end across the six editions, v0.1.0 ships.
 
