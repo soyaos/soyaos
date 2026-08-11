@@ -7,6 +7,8 @@ package state_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/soyaos/soyaos/pkg/state"
@@ -119,6 +121,114 @@ func TestBoltStore_CompareAndSwap_InitialInsertRejectsExistingKey(t *testing.T) 
 	// baseVersion=0 means "expect not exist"; we already inserted → conflict.
 	if _, err := b.CompareAndSwap(ctx, state.ScopeUser, "u1", "k", 0, []byte("v2")); !errors.Is(err, state.ErrConflict) {
 		t.Fatalf("CAS(base=0, key exists) = %v, want ErrConflict", err)
+	}
+}
+
+func TestBoltStore_CompareAndSwap_ConcurrentRetryLosesNoUpdates(t *testing.T) {
+	b := state.NewBoltStore(openTempStore(t))
+	ctx := context.Background()
+
+	const writers = 16
+	const bumpsPerWriter = 10
+
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range bumpsPerWriter {
+				for {
+					cur, err := b.Get(ctx, state.ScopeAgent, "estatemuse", "generated_total")
+					var base int64
+					value := 0
+					if err == nil {
+						base = cur.Version
+						if _, err := fmt.Sscanf(string(cur.Value), "%d", &value); err != nil {
+							errs <- fmt.Errorf("parse counter: %w", err)
+							return
+						}
+					} else if !errors.Is(err, state.ErrNotFound) {
+						errs <- fmt.Errorf("get counter: %w", err)
+						return
+					}
+
+					_, err = b.CompareAndSwap(ctx, state.ScopeAgent, "estatemuse", "generated_total", base, fmt.Appendf(nil, "%d", value+1))
+					if err == nil {
+						break
+					}
+					if !errors.Is(err, state.ErrConflict) {
+						errs <- fmt.Errorf("compare and swap: %w", err)
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() {
+		return
+	}
+
+	final, err := b.Get(ctx, state.ScopeAgent, "estatemuse", "generated_total")
+	if err != nil {
+		t.Fatalf("final Get: %v", err)
+	}
+	want := writers * bumpsPerWriter
+	if string(final.Value) != fmt.Sprint(want) {
+		t.Fatalf("counter = %s, want %d", final.Value, want)
+	}
+	if final.Version != int64(want) {
+		t.Fatalf("version = %d, want %d", final.Version, want)
+	}
+}
+
+func TestBoltStore_PutConcurrentVersionBumpsAreAtomic(t *testing.T) {
+	b := state.NewBoltStore(openTempStore(t))
+	ctx := context.Background()
+
+	const writers = 32
+	versions := make(chan int64, writers)
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for writer := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry, err := b.Put(ctx, state.ScopeRow, "row-42", "tier", fmt.Appendf(nil, "%d", writer))
+			if err != nil {
+				errs <- err
+				return
+			}
+			versions <- entry.Version
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(versions)
+	for err := range errs {
+		t.Errorf("Put: %v", err)
+	}
+
+	seen := make(map[int64]bool, writers)
+	for version := range versions {
+		seen[version] = true
+	}
+	for version := int64(1); version <= writers; version++ {
+		if !seen[version] {
+			t.Errorf("version %d was not assigned; got %v", version, seen)
+		}
+	}
+	final, err := b.Get(ctx, state.ScopeRow, "row-42", "tier")
+	if err != nil {
+		t.Fatalf("final Get: %v", err)
+	}
+	if final.Version != writers {
+		t.Fatalf("final version = %d, want %d", final.Version, writers)
 	}
 }
 

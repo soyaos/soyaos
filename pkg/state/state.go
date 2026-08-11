@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/soyaos/soyaos/pkg/store"
@@ -92,6 +93,12 @@ const StoreNamespace = "state.entries"
 // another scope's keyspace.
 type BoltStore struct {
 	store store.Store
+	// mu serializes every write made through this BoltStore. Put and
+	// CompareAndSwap both derive the next value from a preceding read, so
+	// locking only the underlying Put transaction would still allow two
+	// callers to commit the same version. Delete participates as well so it
+	// cannot slip between a CompareAndSwap read and write.
+	mu sync.Mutex
 }
 
 // NewBoltStore returns a Store backed by s.
@@ -122,6 +129,9 @@ func (b *BoltStore) Put(ctx context.Context, scope Scope, owner, key string, val
 	if !scope.Valid() {
 		return Entry{}, fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	existing, err := b.Get(ctx, scope, owner, key)
 	var nextVersion int64 = 1
 	if err == nil {
@@ -158,6 +168,9 @@ func (b *BoltStore) CompareAndSwap(ctx context.Context, scope Scope, owner, key 
 	if !scope.Valid() {
 		return Entry{}, fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	existing, err := b.Get(ctx, scope, owner, key)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -210,6 +223,9 @@ func (b *BoltStore) Delete(ctx context.Context, scope Scope, owner, key string) 
 	if !scope.Valid() {
 		return fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	return b.store.Delete(ctx, StoreNamespace, store.CompositeKeyString(string(scope), owner, key))
 }
 
