@@ -29,10 +29,11 @@ const defaultLongImageTimeout = 30 * time.Second
 // so the resulting PNG is 2160 px wide — high-DPI on phone screens with
 // no extra storage cost over a 1080 px @1× shot.
 type LongImageRenderer struct {
-	Template   string        // forwarded to HTMLRenderer
-	Schema     string        // artifact schema id (e.g. "newsbeam.v1")
-	ChromePath string        // optional explicit chrome binary; empty = auto-detect
-	Timeout    time.Duration // default 30s if zero
+	Template       string        // forwarded to HTMLRenderer
+	Schema         string        // artifact schema id (e.g. "newsbeam.v1")
+	ChromePath     string        // optional explicit chrome binary; empty = auto-detect
+	Timeout        time.Duration // default 30s if zero
+	DisableSandbox bool          // opt-in for restricted CI/container environments only
 }
 
 // Kind reports KindLongImage; LongImageRenderer is the canonical renderer
@@ -96,6 +97,9 @@ func (r LongImageRenderer) Render(ctx context.Context, snapshot any, dst io.Writ
 
 	allocOpts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	allocOpts = append(allocOpts, chromedp.ExecPath(chromePath))
+	if r.DisableSandbox {
+		allocOpts = append(allocOpts, chromedp.NoSandbox)
+	}
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(runCtx, allocOpts...)
 	defer cancelAlloc()

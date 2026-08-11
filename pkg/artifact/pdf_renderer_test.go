@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,10 @@ const chromeSkipHint = "Chrome not found; install Google Chrome / Chromium or se
 	chromeEnvVar + "=/path/to/chrome (e.g. " +
 	"SOYAOS_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')."
 
+func disableChromeSandboxForTests() bool {
+	return runtime.GOOS == "linux" && os.Getenv("CI") != ""
+}
+
 func TestPDFRenderer_ProducesValidPDFFile(t *testing.T) {
 	chrome, ok := findChromeForTests()
 	if !ok {
@@ -48,10 +53,11 @@ func TestPDFRenderer_ProducesValidPDFFile(t *testing.T) {
 	}
 
 	r := PDFRenderer{
-		Template:   "<h1>{{.Title}}</h1>\n<p>{{.Body}}</p>",
-		Schema:     "guide.v1",
-		ChromePath: chrome,
-		Timeout:    30 * time.Second,
+		Template:       "<h1>{{.Title}}</h1>\n<p>{{.Body}}</p>",
+		Schema:         "guide.v1",
+		ChromePath:     chrome,
+		Timeout:        30 * time.Second,
+		DisableSandbox: disableChromeSandboxForTests(),
 	}
 
 	var buf bytes.Buffer
@@ -112,10 +118,11 @@ func TestPDFRenderer_HonorsTimeout(t *testing.T) {
 	}
 
 	r := PDFRenderer{
-		Template:   "<h1>hello</h1>",
-		Schema:     "guide.v1",
-		ChromePath: chrome,
-		Timeout:    1 * time.Millisecond,
+		Template:       "<h1>hello</h1>",
+		Schema:         "guide.v1",
+		ChromePath:     chrome,
+		Timeout:        1 * time.Millisecond,
+		DisableSandbox: disableChromeSandboxForTests(),
 	}
 
 	var buf bytes.Buffer

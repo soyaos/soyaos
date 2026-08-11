@@ -63,10 +63,11 @@ func TestLongImageRenderer_ProducesPNGFile(t *testing.T) {
 	}
 
 	r := LongImageRenderer{
-		Template:   "<h1>{{.Title}}</h1><p>{{.Body}}</p>",
-		Schema:     "newsbeam.v1",
-		ChromePath: chrome,
-		Timeout:    30 * time.Second,
+		Template:       "<h1>{{.Title}}</h1><p>{{.Body}}</p>",
+		Schema:         "newsbeam.v1",
+		ChromePath:     chrome,
+		Timeout:        30 * time.Second,
+		DisableSandbox: disableChromeSandboxForTests(),
 	}
 
 	var buf bytes.Buffer
