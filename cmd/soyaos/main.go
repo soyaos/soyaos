@@ -199,7 +199,14 @@ func cmdStart(args []string) error {
 	}
 
 	// --- data plane: OpenAI-Compat gateway on :7474 ---
-	gateway := openaicompat.NewServer(k, keys)
+	//
+	// Row-token setup is deliberately non-fatal: a damaged or unwritable key
+	// path disables the narrowly-scoped JWT fallback, while ordinary sk-soya
+	// authentication and the rest of the Solo runtime remain available.
+	gateway, rowTokenKeyPath, rowTokenErr := newDataPlaneGateway(k, keys, "")
+	if rowTokenErr != nil {
+		fmt.Fprintln(os.Stderr, "  warn: row-token authentication disabled:", rowTokenErr)
+	}
 	dataMux := http.NewServeMux()
 	dataMux.Handle("/v1/", gateway.Handler())
 	dataMux.Handle("/v1/models", gateway.Handler())
@@ -238,6 +245,11 @@ func cmdStart(args []string) error {
 	fmt.Fprintf(os.Stdout, "Control RPC:           http://%s/control/v0/   (loopback only)\n", *rpc)
 	fmt.Fprintf(os.Stdout, "Data dir:              %s\n", *dataDir)
 	fmt.Fprintf(os.Stdout, "Dev API key:           %s\n", devKey)
+	if rowTokenErr == nil {
+		fmt.Fprintf(os.Stdout, "Row-token key:         %s\n", rowTokenKeyPath)
+	} else {
+		fmt.Fprintln(os.Stdout, "Row-token key:         disabled (see warning above)")
+	}
 	fmt.Fprintf(os.Stdout, "Upstream LLM (BYOK):   %s\n", byokStatus(llmCfg))
 	fmt.Fprintln(os.Stdout, "Registered agents:")
 	for _, a := range k.List() {
@@ -279,6 +291,28 @@ func cmdStart(args []string) error {
 		_ = controlSrv.Shutdown(shutdownCtx)
 		return err
 	}
+}
+
+// newDataPlaneGateway constructs the exact gateway used by `soyaos start`
+// and wires its persistent row-token verifier. An empty rowTokenKeyPath uses
+// auth.DefaultRowTokenKeyPath. The gateway is returned even on setup failure
+// so cmdStart can warn and preserve zero-configuration startup; in that case
+// RowTokens remains nil and row-token authentication fails closed.
+func newDataPlaneGateway(k *kernel.Kernel, verifier auth.Verifier, rowTokenKeyPath string) (*openaicompat.Server, string, error) {
+	gateway := openaicompat.NewServer(k, verifier)
+	if rowTokenKeyPath == "" {
+		var err error
+		rowTokenKeyPath, err = auth.DefaultRowTokenKeyPath()
+		if err != nil {
+			return gateway, "", err
+		}
+	}
+	signer, err := auth.LoadOrCreateRowTokenSigner(rowTokenKeyPath)
+	if err != nil {
+		return gateway, rowTokenKeyPath, err
+	}
+	gateway.RowTokens = signer
+	return gateway, rowTokenKeyPath, nil
 }
 
 func byokStatus(cfg llmcall.Config) string {
