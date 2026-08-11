@@ -4,11 +4,11 @@
 // boot a real `soyaos start` here — that would require pinning real
 // ports + LLM credentials. Instead we drive the helpers directly:
 //
-//   1. makeScheduleHook + a fake TimeWheel-equivalent → assert
-//      RegisterFromPack adds a Job whose Fire callback collects the
-//      Agent's response and pushes it through the channel hook.
-//   2. channelHookForEnv → assert env-var-ref resolution succeeds when
-//      the ref is set and errors out when it's missing.
+//  1. makeScheduleHook + a fake TimeWheel-equivalent → assert
+//     RegisterFromPack adds a Job whose Fire callback collects the
+//     Agent's response and pushes it through the channel hook.
+//  2. channelHookForEnv → assert env-var-ref resolution succeeds when
+//     the ref is set and errors out when it's missing.
 //
 // These are the two pieces that change between alpha (single LLM
 // path) and APP-552 NewsBeam (autonomous push to DingTalk), so they

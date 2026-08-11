@@ -390,12 +390,12 @@ func TestValidate_PromptUpstream_RejectsUnsupportedProvider(t *testing.T) {
 
 func TestValidate_PromptUpstream_RejectsBadAPIKeyRef(t *testing.T) {
 	bad := []string{
-		"sk-deadbeef",        // inline secret form
-		"$ENV_NAME",          // missing braces
-		"${lowercase}",       // lower-case not allowed
-		"${1LEADING_DIGIT}",  // must start with letter or underscore
-		"${MY-DASH}",         // dash not allowed
-		"${}",                // empty name
+		"sk-deadbeef",       // inline secret form
+		"$ENV_NAME",         // missing braces
+		"${lowercase}",      // lower-case not allowed
+		"${1LEADING_DIGIT}", // must start with letter or underscore
+		"${MY-DASH}",        // dash not allowed
+		"${}",               // empty name
 	}
 	for _, ref := range bad {
 		m := minimalAgentManifest()

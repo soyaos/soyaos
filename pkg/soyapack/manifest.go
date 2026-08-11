@@ -58,19 +58,19 @@ type Manifest struct {
 	Signatures  []Signature   `yaml:"signatures,omitempty" json:"signatures,omitempty"`
 
 	// Agent-specific (also valid in Skill subsets)
-	Entry     string         `yaml:"entry,omitempty" json:"entry,omitempty"`
-	Expose    *Expose        `yaml:"expose,omitempty" json:"expose,omitempty"`
-	Inputs    []Input        `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	Outputs   []any          `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-	Prompt    *Prompt        `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Artifacts []ArtifactDecl `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	Schedules  []ScheduleDecl     `yaml:"schedules,omitempty" json:"schedules,omitempty"`
-	Channels   []ChannelDecl      `yaml:"channels,omitempty" json:"channels,omitempty"`
-	Actions    []ActionDecl       `yaml:"actions,omitempty" json:"actions,omitempty"`
-	State      *StateDecl         `yaml:"state,omitempty" json:"state,omitempty"`
-	StorageNAS []StorageNASDecl   `yaml:"storage_nas,omitempty" json:"storage_nas,omitempty"`
-	Sandbox   *SandboxDecl   `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
-	Uses      []string       `yaml:"uses,omitempty" json:"uses,omitempty"`
+	Entry      string           `yaml:"entry,omitempty" json:"entry,omitempty"`
+	Expose     *Expose          `yaml:"expose,omitempty" json:"expose,omitempty"`
+	Inputs     []Input          `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Outputs    []any            `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Prompt     *Prompt          `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Artifacts  []ArtifactDecl   `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	Schedules  []ScheduleDecl   `yaml:"schedules,omitempty" json:"schedules,omitempty"`
+	Channels   []ChannelDecl    `yaml:"channels,omitempty" json:"channels,omitempty"`
+	Actions    []ActionDecl     `yaml:"actions,omitempty" json:"actions,omitempty"`
+	State      *StateDecl       `yaml:"state,omitempty" json:"state,omitempty"`
+	StorageNAS []StorageNASDecl `yaml:"storage_nas,omitempty" json:"storage_nas,omitempty"`
+	Sandbox    *SandboxDecl     `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
+	Uses       []string         `yaml:"uses,omitempty" json:"uses,omitempty"`
 
 	// Skill-specific
 	Capabilities *Capabilities `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
