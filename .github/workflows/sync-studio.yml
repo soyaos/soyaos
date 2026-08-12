@@ -89,6 +89,8 @@ jobs:
           branch: automation/studio-sync-${{ steps.release.outputs.tag }}
           base: main
           delete-branch: true
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           signoff: true
           add-paths: |
             internal/studio/dist/**
