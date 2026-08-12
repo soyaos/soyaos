@@ -1,0 +1,103 @@
+name: Sync Studio dist
+
+# The studio repository is public, but its GITHUB_TOKEN cannot write to this
+# repository. Polling from the destination keeps all write access inside
+# soyaos/soyaos and avoids a long-lived cross-repository PAT.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Studio release tag to sync; defaults to the newest published release"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: studio-dist-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Build Studio and open sync PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Studio release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG}"
+          if [ -z "${tag}" ]; then
+            tag="$(gh api repos/soyaos/studio/releases --jq 'map(select(.draft == false)) | first | .tag_name')"
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid or missing Studio release tag: ${tag}" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Studio release
+        uses: actions/checkout@v4
+        with:
+          repository: soyaos/studio
+          ref: ${{ steps.release.outputs.tag }}
+          path: studio-source
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build Studio
+        working-directory: studio-source
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Sync dist and verify change scope
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p internal/studio/dist
+          rsync -a --delete studio-source/dist/ internal/studio/dist/
+          printf '%s\n' "${RELEASE_TAG}" > internal/studio/dist/.studio-release
+
+          unexpected="$({ git status --porcelain --untracked-files=all || true; } | cut -c4- | grep -Ev '^internal/studio/dist/' || true)"
+          if [ -n "${unexpected}" ]; then
+            echo "Unexpected files outside internal/studio/dist/:" >&2
+            printf '%s\n' "${unexpected}" >&2
+            exit 1
+          fi
+
+      - name: Create or update sync PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ github.token }}
+          branch: automation/studio-sync-${{ steps.release.outputs.tag }}
+          base: main
+          delete-branch: true
+          signoff: true
+          add-paths: |
+            internal/studio/dist/**
+          commit-message: "chore(studio): sync dist ${{ steps.release.outputs.tag }}"
+          title: "chore(studio): sync dist ${{ steps.release.outputs.tag }}"
+          body: |
+            Automated sync of `internal/studio/dist/` from
+            [soyaos/studio ${{ steps.release.outputs.tag }}](https://github.com/soyaos/studio/releases/tag/${{ steps.release.outputs.tag }}).
+
+            The Studio bundle was rebuilt from the immutable release tag. The
+            workflow rejects changes outside `internal/studio/dist/`.
+          labels: |
+            auto-sync
+            studio
