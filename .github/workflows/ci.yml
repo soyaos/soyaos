@@ -28,27 +28,36 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+          cache-dependency-path: '**/go.sum'
+
+      - name: Verify workspace topology
+        run: |
+          test ! -e go.mod
+          test "$(go list -m | wc -l | tr -d ' ')" = "26"
+          test "$(find cmd pkg -mindepth 2 -maxdepth 2 -name go.mod | wc -l | tr -d ' ')" = "26"
 
       - name: Verify module tidiness
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum || { \
-            echo "go.mod / go.sum out of date — run 'go mod tidy'"; exit 1; }
+        run: make tidy-check
 
       - name: gofmt
-        run: |
-          fmt_out=$(gofmt -l -s .)
-          if [ -n "$fmt_out" ]; then
-            echo "gofmt issues in:"
-            echo "$fmt_out"
-            exit 1
-          fi
+        run: make fmt-check
 
       - name: go vet
-        run: go vet ./...
+        run: make vet
 
-      - name: go test
-        run: go test -race -count=1 ./...
+      - name: go test workspace
+        run: make test
+
+      - name: go test independent modules
+        run: make test-independent
 
       - name: go build
-        run: go build -trimpath -o bin/soyaos ./cmd/soyaos
+        run: make build
+
+      - name: docker build
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          docker build \
+            --build-arg VERSION=ci \
+            --build-arg GITSHA="${GITHUB_SHA::12}" \
+            -t soyaos:ci .

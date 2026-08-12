@@ -12,7 +12,7 @@ SoyaOS 取名自一颗黄豆——一颗豆子能长成毛豆、豆腐、豆浆�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.work)
 
 ## 状态
 
@@ -68,7 +68,7 @@ SoyaOS 网络由三种节点角色组成：
 
 ## 目录结构
 
-参见 [README.md](README.md#repository-layout)。单一 `go.mod` 位于根目录；前端 dist 通过 `//go:embed` 内嵌进二进制，"一份文件全搞定"。
+参见 [README.md](README.md#repository-layout)。根目录的 `go.work` 编排 26 个可独立解析的 module（4 个命令、22 个公共包）；顶层 `make` 目标负责全工作区校验，CI 还会用 `GOWORK=off` 逐 module 验证。前端 dist 仍通过 `//go:embed` 内嵌进单一二进制。
 
 ## 快速开始
 
