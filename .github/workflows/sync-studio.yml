@@ -73,7 +73,9 @@ jobs:
           rsync -a --delete studio-source/dist/ internal/studio/dist/
           printf '%s\n' "${RELEASE_TAG}" > internal/studio/dist/.studio-release
 
-          unexpected="$({ git status --porcelain --untracked-files=all || true; } | cut -c4- | grep -Ev '^internal/studio/dist/' || true)"
+          # The second checkout is intentionally untracked in this worktree;
+          # only its generated dist may enter the pull request.
+          unexpected="$({ git status --porcelain --untracked-files=all || true; } | cut -c4- | grep -Ev '^(studio-source/|internal/studio/dist/)' || true)"
           if [ -n "${unexpected}" ]; then
             echo "Unexpected files outside internal/studio/dist/:" >&2
             printf '%s\n' "${unexpected}" >&2
