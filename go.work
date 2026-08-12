@@ -1,0 +1,30 @@
+go 1.23.0
+
+use (
+	./cmd/soyactl
+	./cmd/soyaos
+	./cmd/soyaos-moon
+	./cmd/soyaos-planet
+	./pkg/artifact
+	./pkg/auth
+	./pkg/connectors
+	./pkg/control
+	./pkg/dispatcher
+	./pkg/factory
+	./pkg/kernel
+	./pkg/llmcall
+	./pkg/memory
+	./pkg/mesh
+	./pkg/openaicompat
+	./pkg/orbit
+	./pkg/runtime
+	./pkg/scheduler
+	./pkg/scope
+	./pkg/sdk
+	./pkg/shortlink
+	./pkg/soyapack
+	./pkg/state
+	./pkg/store
+	./pkg/tooling
+	./pkg/version
+)

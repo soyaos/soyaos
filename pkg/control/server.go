@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	internalpack "github.com/soyaos/soyaos/internal/pack"
+	internalpack "github.com/soyaos/soyaos/pkg/control/internal/pack"
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
 	"github.com/soyaos/soyaos/pkg/llmcall"

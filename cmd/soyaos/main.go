@@ -37,8 +37,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/soyaos/soyaos/internal/buildinfo"
-	"github.com/soyaos/soyaos/internal/studio"
+	"github.com/soyaos/soyaos/cmd/soyaos/internal/buildinfo"
+	"github.com/soyaos/soyaos/cmd/soyaos/internal/studio"
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/connectors/dingtalk"
 	"github.com/soyaos/soyaos/pkg/control"
