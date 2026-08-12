@@ -29,12 +29,14 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
-# Cache module downloads in their own layer.
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Bring in the rest of the source tree.
+# Bring in the workspace and all module manifests. Each module is independently
+# resolvable; the workspace only selects the local source during the build.
 COPY . .
+RUN set -eux; \
+    for module_file in cmd/*/go.mod pkg/*/go.mod; do \
+      module_dir="$(dirname "${module_file}")"; \
+      (cd "${module_dir}" && GOWORK=off go mod download); \
+    done
 
 ARG VERSION=dev
 ARG GITSHA=unknown

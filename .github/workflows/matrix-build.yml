@@ -38,6 +38,7 @@ jobs:
         with:
           go-version: '1.22'
           cache: true
+          cache-dependency-path: '**/go.sum'
 
       - name: Build
         if: matrix.edition == 'solo'

@@ -12,7 +12,7 @@ SoyaOS is named after the humble soybean (黄豆) — one bean, many forms: edam
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.work)
 
 ## Status
 
@@ -70,9 +70,13 @@ Five concepts you will see again and again across the docs, the CLI, and the cod
 
 ```
 soyaos/                        # this repo (core monorepo)
+├── go.work                    # coordinates all 26 Go modules
 ├── cmd/                       # binary entry points
-│   └── soyaos/                # main multi-role binary
-├── pkg/                       # public Go packages — the 13 modules
+│   ├── soyaos/                # main multi-role binary + private internal packages
+│   ├── soyaos-planet/         # Planet-only entry point
+│   ├── soyaos-moon/           # Moon-only entry point
+│   └── soyactl/               # client CLI
+├── pkg/                       # public Go packages — one module per top-level directory
 │   ├── kernel/                # SoyaKernel (LLM kernel, routing, context)
 │   ├── orbit/                 # node registry, health, bootstrap tokens
 │   ├── mesh/                  # SoyaMesh — overlay network (in-process in Solo)
@@ -90,7 +94,6 @@ soyaos/                        # this repo (core monorepo)
 │   ├── factory/               # Agent Factory — NL → manifest
 │   ├── sdk/                   # Go SDK for agent authors
 │   └── version/               # build/version info
-├── internal/                  # not for external import
 ├── api/                       # protobuf-generated stubs (mirrors soyaos/protos)
 ├── plugin/                    # closed-source enterprise plugin interfaces
 ├── deploy/                    # Helm / Terraform / offline tarball
@@ -101,7 +104,7 @@ soyaos/                        # this repo (core monorepo)
 └── scripts/                   # build, test, release helpers
 ```
 
-Single `go.mod` at the root — no multi-module workspace. The binary is one file, embedding frontend assets via `//go:embed`.
+The root `go.work` coordinates 26 independently resolvable modules (4 commands and 22 public packages). Run the top-level `make` targets to test the whole workspace; each module is also verified with `GOWORK=off`. The shipped binary remains one file, embedding frontend assets via `//go:embed`.
 
 ## Quickstart
 
