@@ -43,6 +43,7 @@ type sandbox struct {
 	image        string
 	started      time.Time
 	lastMetered  time.Time
+	gate         *runtime.Gate
 	apiKeyPrefix string
 	agentSlug    string
 	stopTick     chan struct{}
@@ -86,7 +87,12 @@ func (p *Provider) Provision(_ context.Context, req runtime.ProvisionRequest) (r
 	now := time.Now()
 	h := runtime.Handle(newID())
 	p.mu.Lock()
-	p.sandboxes[h] = &sandbox{image: req.Image, started: now, lastMetered: now}
+	p.sandboxes[h] = &sandbox{
+		image:       req.Image,
+		started:     now,
+		lastMetered: now,
+		gate:        runtime.NewGate(req.Caps),
+	}
 	p.mu.Unlock()
 	return h, nil
 }
@@ -124,6 +130,12 @@ func (p *Provider) Execute(ctx context.Context, h runtime.Handle, req runtime.Ex
 	}
 	if len(req.Cmd) == 0 {
 		return runtime.ExecuteResult{}, errors.New("process: empty Cmd")
+	}
+	if req.Access == nil {
+		return runtime.ExecuteResult{}, errors.Join(runtime.ErrInvalidTask, errors.New("access declaration is required"))
+	}
+	if err := s.gate.Authorize(req.Cmd[0], *req.Access); err != nil {
+		return runtime.ExecuteResult{}, err
 	}
 	cmd := exec.CommandContext(ctx, req.Cmd[0], req.Cmd[1:]...)
 	if len(req.Stdin) > 0 {

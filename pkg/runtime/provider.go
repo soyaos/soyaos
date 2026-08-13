@@ -45,14 +45,16 @@ type Handle string
 type ProvisionRequest struct {
 	Profile Profile
 	Image   string
+	Caps    Caps // capability snapshot copied into the provisioned sandbox
 }
 
 // ExecuteRequest carries one command invocation inside a provisioned
 // sandbox. Stage 5 will add streaming variants; the synchronous shape
 // here is the lowest common denominator.
 type ExecuteRequest struct {
-	Cmd   []string
-	Stdin []byte
+	Cmd    []string
+	Stdin  []byte
+	Access *Access // required declaration of network/filesystem side effects
 }
 
 // ExecuteResult is the terminal state of one Execute call.

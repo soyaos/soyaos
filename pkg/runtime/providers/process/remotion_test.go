@@ -1,6 +1,7 @@
 package process
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,6 +19,12 @@ func TestBuildRemotionExecuteRequest_MinimalArgv(t *testing.T) {
 	want := "npx remotion render /workdir/src/index.ts MyClip /workdir/out/clip.mp4"
 	if got != want {
 		t.Errorf("argv = %q\nwant %q", got, want)
+	}
+	if !reflect.DeepEqual(req.Access.FSRead, []string{"/workdir/src/index.ts"}) {
+		t.Errorf("FSRead = %v, want entry point", req.Access.FSRead)
+	}
+	if !reflect.DeepEqual(req.Access.FSWrite, []string{"/workdir/out/clip.mp4"}) {
+		t.Errorf("FSWrite = %v, want output path", req.Access.FSWrite)
 	}
 }
 
@@ -39,6 +46,9 @@ func TestBuildRemotionExecuteRequest_AllOptionalFlags(t *testing.T) {
 	want := "/usr/local/bin/npx remotion render /workdir/src/index.ts MyClip /workdir/out/clip.mp4 --props=/workdir/props.json --concurrency=4 --frames=0-300 --quality=85"
 	if got != want {
 		t.Errorf("argv = %q\nwant %q", got, want)
+	}
+	if !reflect.DeepEqual(req.Access.FSRead, []string{"/workdir/src/index.ts", "/workdir/props.json"}) {
+		t.Errorf("FSRead = %v, want entry point + props", req.Access.FSRead)
 	}
 }
 

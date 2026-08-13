@@ -2,11 +2,16 @@ package process
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/soyaos/soyaos/pkg/runtime"
 )
+
+func execCaps(names ...string) runtime.Caps {
+	return runtime.Caps{Exec: names}
+}
 
 func TestProvider_Capabilities(t *testing.T) {
 	p := New()
@@ -22,7 +27,10 @@ func TestProvider_Capabilities(t *testing.T) {
 func TestProvider_ProvisionExecuteEcho(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	h, err := p.Provision(ctx, runtime.ProvisionRequest{Profile: runtime.ProfileProcess, Image: ""})
+	h, err := p.Provision(ctx, runtime.ProvisionRequest{
+		Profile: runtime.ProfileProcess,
+		Caps:    execCaps("echo"),
+	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -30,7 +38,7 @@ func TestProvider_ProvisionExecuteEcho(t *testing.T) {
 		t.Fatal("Provision returned empty handle")
 	}
 
-	res, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"echo", "hello"}})
+	res, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"echo", "hello"}, Access: &runtime.Access{}})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -59,10 +67,82 @@ func TestProvider_ExecuteEmptyCmd(t *testing.T) {
 	}
 }
 
+func TestProvider_ExecuteFailClosedAndTyped(t *testing.T) {
+	p := New()
+	h, err := p.Provision(context.Background(), runtime.ProvisionRequest{})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	_, err = p.Execute(context.Background(), h, runtime.ExecuteRequest{Cmd: []string{"definitely-not-started"}, Access: &runtime.Access{}})
+	if !errors.Is(err, runtime.ErrDeniedByCapability) {
+		t.Fatalf("Execute error = %v, want ErrDeniedByCapability", err)
+	}
+	var denied *runtime.DeniedError
+	if !errors.As(err, &denied) || denied.Capability != "exec" {
+		t.Fatalf("Execute error = %#v, want exec *DeniedError", err)
+	}
+}
+
+func TestProvider_ExecuteAuthorizesDeclaredSideEffects(t *testing.T) {
+	p := New()
+	caps := runtime.Caps{
+		Exec:       []string{"true"},
+		NetworkOut: []runtime.NetRule{{Host: "api.example.com", Port: 443, Proto: "https"}},
+		FSRead:     []string{"/work/input"},
+		FSWrite:    []string{"/work/output"},
+	}
+	h, err := p.Provision(context.Background(), runtime.ProvisionRequest{Caps: caps})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	access := runtime.Access{
+		NetworkOut: []runtime.EgressAccess{{Host: "api.example.com", Port: 443, Proto: "https"}},
+		FSRead:     []string{"/work/input/source.txt"},
+		FSWrite:    []string{"/work/output/result.txt"},
+	}
+	if _, err := p.Execute(context.Background(), h, runtime.ExecuteRequest{Cmd: []string{"true"}, Access: &access}); err != nil {
+		t.Fatalf("Execute allowed request: %v", err)
+	}
+}
+
+func TestProvider_ExecuteDeniesEachDeclaredSideEffect(t *testing.T) {
+	tests := []struct {
+		name       string
+		access     runtime.Access
+		capability string
+	}{
+		{
+			name:       "network",
+			access:     runtime.Access{NetworkOut: []runtime.EgressAccess{{Host: "blocked.example.com", Port: 443, Proto: "https"}}},
+			capability: "network_out",
+		},
+		{name: "fs read", access: runtime.Access{FSRead: []string{"/blocked/input"}}, capability: "fs_read"},
+		{name: "fs write", access: runtime.Access{FSWrite: []string{"/blocked/output"}}, capability: "fs_write"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := New()
+			h, err := p.Provision(context.Background(), runtime.ProvisionRequest{Caps: execCaps("true")})
+			if err != nil {
+				t.Fatalf("Provision: %v", err)
+			}
+			access := test.access
+			_, err = p.Execute(context.Background(), h, runtime.ExecuteRequest{Cmd: []string{"true"}, Access: &access})
+			var denied *runtime.DeniedError
+			if !errors.Is(err, runtime.ErrDeniedByCapability) || !errors.As(err, &denied) {
+				t.Fatalf("Execute error = %v, want typed capability denial", err)
+			}
+			if denied.Capability != test.capability {
+				t.Fatalf("Capability = %q, want %q", denied.Capability, test.capability)
+			}
+		})
+	}
+}
+
 func TestProvider_TerminateThenExecuteFails(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	h, _ := p.Provision(ctx, runtime.ProvisionRequest{})
+	h, _ := p.Provision(ctx, runtime.ProvisionRequest{Caps: execCaps("sh")})
 	if err := p.Terminate(ctx, h); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
@@ -71,6 +151,18 @@ func TestProvider_TerminateThenExecuteFails(t *testing.T) {
 	}
 	if err := p.Terminate(ctx, h); err == nil {
 		t.Fatal("double Terminate must error")
+	}
+}
+
+func TestProvider_ExecuteRejectsMissingAccessDeclaration(t *testing.T) {
+	p := New()
+	h, err := p.Provision(context.Background(), runtime.ProvisionRequest{Caps: execCaps("true")})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	_, err = p.Execute(context.Background(), h, runtime.ExecuteRequest{Cmd: []string{"true"}})
+	if !errors.Is(err, runtime.ErrInvalidTask) {
+		t.Fatalf("Execute error = %v, want ErrInvalidTask", err)
 	}
 }
 
@@ -98,8 +190,8 @@ func TestProvider_RejectsWrongProfile(t *testing.T) {
 func TestProvider_ExecuteNonZeroExit(t *testing.T) {
 	p := New()
 	ctx := context.Background()
-	h, _ := p.Provision(ctx, runtime.ProvisionRequest{})
-	res, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"sh", "-c", "exit 7"}})
+	h, _ := p.Provision(ctx, runtime.ProvisionRequest{Caps: execCaps("sh")})
+	res, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"sh", "-c", "exit 7"}, Access: &runtime.Access{}})
 	if err != nil {
 		// non-zero exit should be reported via ExitCode, not a Go error.
 		// (sh is universally present on macOS + linux test runners.)
