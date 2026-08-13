@@ -17,7 +17,7 @@
     "pkg/mesh": "v0.1.0-alpha.1",
     "pkg/openaicompat": "v0.1.0-alpha.1",
     "pkg/orbit": "v0.1.0-alpha.1",
-    "pkg/runtime": "v0.1.0-alpha.1",
+    "pkg/runtime": "v0.1.0-alpha.2",
     "pkg/scheduler": "v0.1.0-alpha.1",
     "pkg/scope": "v0.1.0-alpha.1",
     "pkg/sdk": "v0.1.0-alpha.1",
