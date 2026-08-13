@@ -73,6 +73,8 @@ func main() {
 		exit(cmdAgent(os.Args[2:]))
 	case "pack":
 		exit(cmdPack(os.Args[2:]))
+	case "relay":
+		exit(cmdRelay(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -100,6 +102,8 @@ Usage:
   soyaos pack validate <path>     parse + validate a SoyaPack v0 manifest
                                   (<path> is a directory containing soyapack.yaml
                                   or a path to a .yaml file)
+  soyaos relay serve              run a ciphertext-only UDP/QUIC relay
+  soyaos relay token              mint a short-lived Moon/Comet route token
   soyaos help                     show this message
 
 Environment (all optional — soyaos boots with zero config):

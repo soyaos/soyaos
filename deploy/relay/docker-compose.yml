@@ -1,0 +1,29 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command:
+      - relay
+      - serve
+      - --listen
+      - 0.0.0.0:7443
+      - --health-listen
+      - 0.0.0.0:7480
+      - --rate-mbps
+      - "10"
+      - --burst-mib
+      - "4"
+    env_file:
+      - .env
+    ports:
+      - "7443:7443/udp"
+      - "127.0.0.1:7480:7480/tcp"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=16m,mode=1777

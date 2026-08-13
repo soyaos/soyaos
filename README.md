@@ -40,7 +40,11 @@ Three node roles forming the SoyaOS network:
 - **Moon** — long-lived, lives inside your intranet / on your device. Reverse-dials Planet; holds your data, credentials, and persistent state.
 - **Comet** — ephemeral, task-scoped sandbox (microVM / container / process). Used and discarded.
 
-**Control plane through Planet; data plane prefers Moon ↔ Comet direct.** Large payloads (videos, files) never have to touch the Planet.
+**Control plane through Planet; data plane prefers Moon ↔ Comet direct.** Large
+payloads normally bypass Planet. When direct LAN and WireGuard both fail, the
+optional Planet relay forwards end-to-end encrypted QUIC datagrams; it never
+terminates Moon ↔ Comet mTLS or sees artifact plaintext. See the
+[relay privacy commitment](docs/security/relay-privacy.md).
 
 **All-in-One Mode** (Solo Edition): all three roles run inside a single Go process — one binary, zero dependencies, `./soyaos start` and you have a SoyaOS.
 

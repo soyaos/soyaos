@@ -1,0 +1,60 @@
+#cloud-config
+
+# APP-510 US-West alpha relay base hardening. The static relay binary and its
+# signing secret are installed after SSH host-key verification.
+package_update: true
+packages:
+  - ca-certificates
+  - ufw
+
+users:
+  - default
+  - name: soyarelay
+    system: true
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+
+write_files:
+  - path: /etc/systemd/system/soyaos-relay.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=SoyaOS ciphertext-only QUIC relay
+      Documentation=https://github.com/soyaos/soyaos
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=soyarelay
+      Group=soyarelay
+      EnvironmentFile=/etc/soyaos-relay.env
+      ExecStart=/usr/local/bin/soyaos relay serve --listen 0.0.0.0:7443 --health-listen 127.0.0.1:7480 --rate-mbps 10 --burst-mib 4
+      Restart=on-failure
+      RestartSec=2s
+      NoNewPrivileges=true
+      PrivateTmp=true
+      PrivateDevices=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+      RestrictSUIDSGID=true
+      RestrictRealtime=true
+      LockPersonality=true
+      MemoryDenyWriteExecute=true
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - install -o root -g soyarelay -m 0640 /dev/null /etc/soyaos-relay.env
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow OpenSSH
+  - ufw allow 7443/udp
+  - ufw --force enable
+  - systemctl daemon-reload

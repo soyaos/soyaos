@@ -39,7 +39,10 @@ SoyaOS 网络由三种节点角色组成：
 - **Moon** —— 长期驻留在你的内网或自己的设备上。**反向出连** Planet；持有你的数据、凭据与状态。
 - **Comet** —— 任务级临时沙箱（microVM / 容器 / 进程）。用完即焚。
 
-**控制面经 Planet，数据面优先 Moon ↔ Comet 直连。** 大文件（视频、产物）从不必经 Planet。
+**控制面经 Planet，数据面优先 Moon ↔ Comet 直连。** 大文件通常不经过 Planet；
+当局域网直连和 WireGuard 都失败时，可选的 Planet relay 只转发端到端加密的
+QUIC 数据报，不终止 Moon ↔ Comet mTLS，也看不到制品明文。详见
+[relay 隐私承诺](docs/security/relay-privacy.md)。
 
 **All-in-One Mode**（单机版）：三种角色跑在**同一个 Go 进程**里——一份二进制、零依赖，`./soyaos start` 就有一颗 SoyaOS。
 

@@ -53,8 +53,9 @@ FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/soyaos /soyaos
 
-# 7474 = control/HTTP, 7475 = gRPC. See cmd/soyaos for flag semantics.
-EXPOSE 7474 7475
+# 7474 = control/HTTP, 7475 = gRPC, 7443/udp = optional ciphertext relay,
+# 7480 = optional relay health endpoint. See cmd/soyaos for flag semantics.
+EXPOSE 7474 7475 7443/udp 7480
 
 ENTRYPOINT ["/soyaos"]
 CMD ["start", "--listen", "0.0.0.0:7474", "--rpc", "0.0.0.0:7475", "--data-dir", "/data"]

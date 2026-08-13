@@ -34,6 +34,9 @@ type PathStrategy interface {
 type PeerCandidate struct {
 	// PeerID is the authenticated identity of the candidate.
 	PeerID PeerID
+	// DirectAddr is the peer's LAN UDP address. Older alpha callers that
+	// leave it empty fall back to PeerID-as-address for compatibility.
+	DirectAddr string
 	// SameLAN is true when the planner has evidence Moon and Comet are
 	// on the same /24 (or equivalent). When true, direct-lan wins.
 	SameLAN bool
@@ -72,7 +75,11 @@ type DefaultPathStrategy struct{}
 func (DefaultPathStrategy) Select(_ context.Context, peers []PeerCandidate) (PathChoice, error) {
 	for _, c := range peers {
 		if c.SameLAN {
-			return PathChoice{Strategy: "direct-lan", Endpoint: string(c.PeerID)}, nil
+			endpoint := c.DirectAddr
+			if endpoint == "" {
+				endpoint = string(c.PeerID)
+			}
+			return PathChoice{Strategy: "direct-lan", Endpoint: endpoint}, nil
 		}
 		if c.OverlayIP != "" {
 			return PathChoice{Strategy: "overlay-wg", Endpoint: c.OverlayIP}, nil
