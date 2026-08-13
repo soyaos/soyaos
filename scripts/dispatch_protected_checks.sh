@@ -8,8 +8,9 @@
 
 set -euo pipefail
 
-branch="${1:?usage: dispatch_protected_checks.sh BRANCH [MODULE_RELEASE_PR]}"
+branch="${1:?usage: dispatch_protected_checks.sh BRANCH [MODULE_RELEASE_PR] [BASE_REF]}"
 module_release_pr="${2:-false}"
+base_ref="${3:-}"
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 
 head_sha="$(gh api "repos/${repo}/git/ref/heads/${branch}" --jq .object.sha)"
@@ -19,6 +20,10 @@ matrix_args=(workflow run matrix-build.yml --repo "${repo}" --ref "${branch}")
 if [[ "${module_release_pr}" == "true" ]]; then
   ci_args+=(-f module_release_pr=true)
   matrix_args+=(-f module_release_pr=true)
+  if [[ -n "${base_ref}" ]]; then
+    ci_args+=(-f module_release_base_ref="${base_ref}")
+    matrix_args+=(-f module_release_base_ref="${base_ref}")
+  fi
 fi
 
 gh "${ci_args[@]}"

@@ -16,6 +16,10 @@ on:
         required: false
         default: false
         type: boolean
+      module_release_base_ref:
+        description: Optional historical base for a recovered module release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -50,8 +54,11 @@ jobs:
 
       - name: Prepare pending module tags
         if: matrix.edition == 'solo' && github.event_name == 'workflow_dispatch' && inputs.module_release_pr
+        env:
+          MODULE_RELEASE_BASE_REF: ${{ inputs.module_release_base_ref }}
         run: |
-          python3 scripts/module_release.py local-tags --base-ref origin/main
+          base_ref="${MODULE_RELEASE_BASE_REF:-origin/main}"
+          python3 scripts/module_release.py local-tags --base-ref "${base_ref}"
           git config --global protocol.file.allow always
           git config --global url."file://${GITHUB_WORKSPACE}/".insteadOf "https://github.com/soyaos/soyaos"
           echo 'GIT_ALLOW_PROTOCOL=file:https:http:ssh:git' >> "${GITHUB_ENV}"
