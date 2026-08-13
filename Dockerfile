@@ -43,7 +43,14 @@ RUN set -eux; \
         (cd "${module_dir}" && GOWORK=off go mod download); \
       done; \
     else \
-      echo "pending module tags: resolving dependencies through go.work"; \
+      echo "pending module tags: replacing versioned internal requirements with workspace source"; \
+      sed -n -E \
+        's#^[[:space:]]*(github\.com/soyaos/soyaos/(cmd|pkg)/[^[:space:]]+)[[:space:]]+(v[^[:space:]]+).*#\1 \3#p' \
+        cmd/*/go.mod pkg/*/go.mod | sort -u | \
+      while read -r module_path module_version; do \
+        module_dir="${module_path#github.com/soyaos/soyaos/}"; \
+        go work edit -replace="${module_path}@${module_version}=./${module_dir}"; \
+      done; \
     fi
 
 ARG VERSION=dev
