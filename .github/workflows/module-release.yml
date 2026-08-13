@@ -127,15 +127,24 @@ jobs:
           toy="$(mktemp -d)"
           cd "${toy}"
           go mod init example.com/soyaos-module-release-smoke
-          for attempt in $(seq 1 12); do
+          # proxy.golang.org may retain a negative lookup for roughly 15
+          # minutes when the version is queried just before its tag arrives.
+          # Keep polling long enough to outlive that cache, while succeeding
+          # immediately once the immutable tag is indexed.
+          max_attempts=80
+          retry_delay_seconds=15
+          for attempt in $(seq 1 "${max_attempts}"); do
             if GOPROXY=https://proxy.golang.org go mod download -json "${module}@${version}" > module.json; then
+              echo "public Go proxy indexed ${module}@${version} on attempt ${attempt}"
               break
             fi
-            if [[ "${attempt}" -eq 12 ]]; then
+            error="$(jq -r '.Error // "unknown proxy error"' module.json 2>/dev/null || echo 'unreadable proxy response')"
+            echo "public Go proxy attempt ${attempt}/${max_attempts}: ${error}" >&2
+            if [[ "${attempt}" -eq "${max_attempts}" ]]; then
               echo "public Go proxy did not index ${module}@${version}" >&2
               exit 1
             fi
-            sleep 10
+            sleep "${retry_delay_seconds}"
           done
           jq -e --arg module "${module}" --arg version "${version}" \
             '.Path == $module and .Version == $version and (.Sum | length > 0)' module.json
