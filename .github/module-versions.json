@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "modules": {
-    "cmd/soyactl": "v0.1.0-alpha.1",
-    "cmd/soyaos": "v0.1.0-alpha.1",
-    "cmd/soyaos-moon": "v0.1.0-alpha.1",
-    "cmd/soyaos-planet": "v0.1.0-alpha.1",
+    "cmd/soyactl": "v0.1.0-alpha.2",
+    "cmd/soyaos": "v0.1.0-alpha.2",
+    "cmd/soyaos-moon": "v0.1.0-alpha.2",
+    "cmd/soyaos-planet": "v0.1.0-alpha.2",
     "pkg/artifact": "v0.1.0-alpha.1",
     "pkg/auth": "v0.1.0-alpha.1",
     "pkg/connectors": "v0.1.0-alpha.1",
@@ -26,6 +26,6 @@
     "pkg/state": "v0.1.0-alpha.1",
     "pkg/store": "v0.1.0-alpha.1",
     "pkg/tooling": "v0.1.0-alpha.1",
-    "pkg/version": "v0.1.0-alpha.1"
+    "pkg/version": "v0.1.0-alpha.2"
   }
 }
