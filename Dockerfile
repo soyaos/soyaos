@@ -13,6 +13,9 @@
 # Build args:
 #   VERSION  semantic version string baked into the binary (default: dev)
 #   GITSHA   git commit SHA baked into the binary (default: unknown)
+#   INDEPENDENT_MODULE_DOWNLOAD  resolve every module with GOWORK=off before
+#                                building (default: true; false only while CI
+#                                simulates not-yet-published module tags)
 #
 # Example:
 #   docker build \
@@ -32,11 +35,16 @@ WORKDIR /src
 # Bring in the workspace and all module manifests. Each module is independently
 # resolvable; the workspace only selects the local source during the build.
 COPY . .
+ARG INDEPENDENT_MODULE_DOWNLOAD=true
 RUN set -eux; \
-    for module_file in cmd/*/go.mod pkg/*/go.mod; do \
-      module_dir="$(dirname "${module_file}")"; \
-      (cd "${module_dir}" && GOWORK=off go mod download); \
-    done
+    if [ "${INDEPENDENT_MODULE_DOWNLOAD}" = "true" ]; then \
+      for module_file in cmd/*/go.mod pkg/*/go.mod; do \
+        module_dir="$(dirname "${module_file}")"; \
+        (cd "${module_dir}" && GOWORK=off go mod download); \
+      done; \
+    else \
+      echo "pending module tags: resolving dependencies through go.work"; \
+    fi
 
 ARG VERSION=dev
 ARG GITSHA=unknown
