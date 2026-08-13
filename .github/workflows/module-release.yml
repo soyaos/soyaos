@@ -189,5 +189,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: automation/module-release
         run: |
-          gh workflow run ci.yml --ref "${BRANCH}" -f module_release_pr=true
-          gh workflow run matrix-build.yml --ref "${BRANCH}"
+          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref "${BRANCH}" -f module_release_pr=true
+          gh workflow run matrix-build.yml --repo "${GITHUB_REPOSITORY}" --ref "${BRANCH}" -f module_release_pr=true
