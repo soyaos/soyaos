@@ -164,6 +164,44 @@ func TestOpenAICompatResolvedModelPassesThroughRealNames(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatBuildBodyOptionalThinking(t *testing.T) {
+	request := Request{
+		Messages:       []Message{{Role: "user", Content: "return JSON"}},
+		ResponseFormat: "json_object",
+	}
+
+	plain := OpenAICompat{Cfg: Config{Model: "x"}}
+	body, err := plain.buildBody(request, false)
+	if err != nil {
+		t.Fatalf("buildBody plain: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode plain body: %v", err)
+	}
+	if _, exists := payload["enable_thinking"]; exists {
+		t.Fatalf("unset thinking config must omit vendor extension: %s", body)
+	}
+	format, ok := payload["response_format"].(map[string]any)
+	if !ok || format["type"] != "json_object" {
+		t.Fatalf("response_format = %#v, want json_object", payload["response_format"])
+	}
+
+	disabled := false
+	withFlag := OpenAICompat{Cfg: Config{Model: "x", EnableThinking: &disabled}}
+	body, err = withFlag.buildBody(request, true)
+	if err != nil {
+		t.Fatalf("buildBody flagged: %v", err)
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode flagged body: %v", err)
+	}
+	got, exists := payload["enable_thinking"]
+	if !exists || got != false {
+		t.Fatalf("enable_thinking = %#v (exists=%v), want false", got, exists)
+	}
+}
+
 func TestHostOf(t *testing.T) {
 	cases := map[string]string{
 		"https://api.openai.com/v1":   "api.openai.com",

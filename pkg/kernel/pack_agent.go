@@ -28,7 +28,9 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -321,11 +323,12 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 			}
 			injected = append(injected, req.Messages...)
 			return provider.GenerateStream(ctx, llmcall.Request{
-				Model:       resolvedModel,
-				Messages:    injected,
-				Temperature: req.Temperature,
-				MaxTokens:   req.MaxTokens,
-				Stream:      true,
+				Model:          resolvedModel,
+				Messages:       injected,
+				Temperature:    req.Temperature,
+				MaxTokens:      req.MaxTokens,
+				Stream:         true,
+				ResponseFormat: req.ResponseFormat,
 			}, out)
 		}
 
@@ -337,35 +340,93 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 		// each stage sees only what the chain explicitly threads.
 		userPayload := combineUserMessages(req.Messages)
 
+		// Chain stages need a max_tokens *floor*, not just a default. The
+		// caller's max_tokens controls the *final* user-visible output
+		// length — short for a chat ("give me a quick answer"), longer
+		// for a structured artifact. But chain intermediate stages are
+		// an internal contract: each stage emits a structured artifact
+		// (YAML report, guide.v1 JSON, …) the next stage consumes, and
+		// it must finish.
+		//
+		// Reasoning models (DashScope qwen3.x, OpenAI o-series, …) burn
+		// 3-5 KB of *reasoning* tokens before the first content token.
+		// A 1024-token cap is exhausted during reasoning and DashScope
+		// tears down the TCP stream without a stop frame — we observe
+		// "unexpected EOF" at the SSE scanner. 4096 leaves enough
+		// headroom for reasoning + a 2 KB structured artifact.
+		//
+		// We apply the same floor to the final stage too: a 1024 cap
+		// would truncate the refined guide.v1 JSON into invalid syntax,
+		// and "the chat output got cut off" is worse than "the chat is
+		// slightly longer than I picked." Power users who actually want
+		// short output can pick a smaller value AND it still wins above
+		// the floor — but the floor stays at 4096.
+		const chainMinMaxTokens = 4096
+		stageMaxTokens := req.MaxTokens
+		if stageMaxTokens < chainMinMaxTokens {
+			stageMaxTokens = chainMinMaxTokens
+		}
+
 		for i := 0; i < len(prompts)-1; i++ {
 			stage := prompts[i]
-			resp, err := provider.Generate(ctx, llmcall.Request{
+			// Chain intermediate stages run streaming internally and
+			// collect the chunks. A non-streaming call would force the
+			// upstream to generate the whole response *before* sending
+			// any headers — Compo's generate_guide stage emits 2-3 KB
+			// of JSON and routinely takes 60-120s on DashScope, which
+			// trips http.Transport.ResponseHeaderTimeout. Streaming
+			// makes headers arrive in ~1-2s and shifts the timeout
+			// pressure onto the per-chunk gap, which the upstream paces.
+			content, err := streamCollect(ctx, provider, llmcall.Request{
 				Model: resolvedModel,
 				Messages: []llmcall.Message{
 					{Role: "system", Content: stage.body},
 					{Role: "user", Content: userPayload},
 				},
-				Temperature: req.Temperature,
-				MaxTokens:   req.MaxTokens,
+				Temperature:    req.Temperature,
+				MaxTokens:      stageMaxTokens,
+				Stream:         true,
+				ResponseFormat: req.ResponseFormat,
 			})
 			if err != nil {
 				return fmt.Errorf("kernel: prompt step %q (#%d): %w", stage.id, i, err)
 			}
-			userPayload = resp.Content
+			userPayload = content
 		}
 
-		// Final stage — stream back to the caller.
+		// Final stage. We could pipe upstream chunks straight to `out`
+		// for true token-by-token streaming, but a transient EOF from
+		// the upstream would then arrive at the client mid-stream with
+		// no way to retry — half the JSON, no closing brace. Collect-
+		// then-emit lets streamCollect's retry layer recover from
+		// upstream tear-downs, at the cost of "burst" streaming. The
+		// front-end can choose to simulate per-token streaming locally.
 		final := prompts[len(prompts)-1]
-		return provider.GenerateStream(ctx, llmcall.Request{
+		content, err := streamCollect(ctx, provider, llmcall.Request{
 			Model: resolvedModel,
 			Messages: []llmcall.Message{
 				{Role: "system", Content: final.body},
 				{Role: "user", Content: userPayload},
 			},
-			Temperature: req.Temperature,
-			MaxTokens:   req.MaxTokens,
-			Stream:      true,
-		}, out)
+			Temperature:    req.Temperature,
+			MaxTokens:      stageMaxTokens,
+			Stream:         true,
+			ResponseFormat: req.ResponseFormat,
+		})
+		if err != nil {
+			return fmt.Errorf("kernel: prompt step %q (#%d): %w", final.id, len(prompts)-1, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- llmcall.Chunk{Delta: content}:
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- llmcall.Chunk{Done: true}:
+		}
+		return nil
 	}
 }
 
@@ -452,27 +513,15 @@ func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolv
 		if err != nil {
 			return ActionResult{}, fmt.Errorf("kernel: encode action payload: %w", err)
 		}
-		out := make(chan llmcall.Chunk, 8)
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- provider.GenerateStream(ctx, llmcall.Request{
-				Model: resolvedModel,
-				Messages: []llmcall.Message{
-					{Role: "system", Content: promptBody},
-					{Role: "user", Content: userPayload},
-				},
-				Stream: true,
-			}, out)
-			close(out)
-		}()
-		var sb strings.Builder
-		for c := range out {
-			if c.Done {
-				continue
-			}
-			sb.WriteString(c.Delta)
-		}
-		if err := <-errCh; err != nil {
+		content, err := streamCollect(ctx, provider, llmcall.Request{
+			Model: resolvedModel,
+			Messages: []llmcall.Message{
+				{Role: "system", Content: promptBody},
+				{Role: "user", Content: userPayload},
+			},
+			Stream: true,
+		})
+		if err != nil {
 			return ActionResult{}, fmt.Errorf("kernel: action %q upstream: %w", decl.ID, err)
 		}
 		return ActionResult{
@@ -482,13 +531,69 @@ func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolv
 			ActionID:  decl.ID,
 			RowID:     req.RowID,
 			Output: map[string]any{
-				"content":   sb.String(),
+				"content":   content,
 				"handler":   decl.Handler,
 				"artifacts": decl.Artifacts,
 			},
 			EnqueuedAt: time.Now(),
 		}, nil
 	}
+}
+
+// streamCollect runs a streaming generation against the upstream and
+// returns the concatenated content. Used by both chain intermediate
+// stages and the per-row action handler — anywhere we want the full
+// response as a single string while still getting headers back from
+// the upstream in seconds rather than waiting for the whole body to
+// land. Mirrors the SSE consumer pattern so a Done chunk terminates
+// cleanly without contributing to the buffer.
+//
+// Retries io.ErrUnexpectedEOF up to streamCollectMaxRetries times. Long
+// SSE streams to DashScope reasoning models (qwen3.6-plus thinks for
+// 60-90s before any content) get torn down by intermediate network
+// hops or the upstream's own idle handling, surfacing as a half-closed
+// TCP — there's no semantic error, just retry. We deliberately do NOT
+// retry status-code errors or context cancellation: a 4xx means the
+// request is bad, a 5xx means the upstream is down for everyone, and
+// a cancelled ctx means the caller wants to stop.
+func streamCollect(ctx context.Context, provider llmcall.Provider, req llmcall.Request) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < streamCollectMaxRetries; attempt++ {
+		s, err := streamCollectOnce(ctx, provider, req)
+		if err == nil {
+			return s, nil
+		}
+		lastErr = err
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			return "", err
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+	}
+	return "", fmt.Errorf("after %d retries: %w", streamCollectMaxRetries, lastErr)
+}
+
+const streamCollectMaxRetries = 3
+
+func streamCollectOnce(ctx context.Context, provider llmcall.Provider, req llmcall.Request) (string, error) {
+	out := make(chan llmcall.Chunk, 16)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- provider.GenerateStream(ctx, req, out)
+		close(out)
+	}()
+	var sb strings.Builder
+	for c := range out {
+		if c.Done {
+			continue
+		}
+		sb.WriteString(c.Delta)
+	}
+	if err := <-errCh; err != nil {
+		return "", err
+	}
+	return sb.String(), nil
 }
 
 // encodeActionUserPayload produces the user-message body the action's

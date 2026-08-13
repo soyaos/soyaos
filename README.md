@@ -16,7 +16,10 @@ SoyaOS is named after the humble soybean (黄豆) — one bean, many forms: edam
 
 ## Status
 
-**Pre-release: v0.1.0-alpha.0.** Day-1 scaffolding only — APIs are unstable and will change before v0.1.0. Not yet ready for production use.
+> [!WARNING]
+> **Active development; not formally released.** APIs and features are
+> unstable and may introduce breaking changes at any time. Do not use this
+> alpha as a production dependency.
 
 The v0.1.0 milestone is locked to four flagship user stories (DD-008 ~ DD-011):
 

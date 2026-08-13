@@ -28,6 +28,10 @@ type Request struct {
 	Temperature float32
 	MaxTokens   int
 	Stream      bool
+	// ResponseFormat requests an upstream-enforced output format when the
+	// provider supports the OpenAI response_format extension. Empty means the
+	// provider default; "json_object" requests syntactically valid JSON.
+	ResponseFormat string
 }
 
 // Response is a non-streamed chat-completion result.

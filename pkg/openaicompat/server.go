@@ -102,11 +102,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 // --- Chat completions ------------------------------------------------------
 
 type chatReq struct {
-	Model       string           `json:"model"`
-	Messages    []chatReqMessage `json:"messages"`
-	Stream      bool             `json:"stream,omitempty"`
-	Temperature float32          `json:"temperature,omitempty"`
-	MaxTokens   int              `json:"max_tokens,omitempty"`
+	Model          string           `json:"model"`
+	Messages       []chatReqMessage `json:"messages"`
+	Stream         bool             `json:"stream,omitempty"`
+	Temperature    float32          `json:"temperature,omitempty"`
+	MaxTokens      int              `json:"max_tokens,omitempty"`
+	ResponseFormat *struct {
+		Type string `json:"type"`
+	} `json:"response_format,omitempty"`
 }
 
 type chatReqMessage struct {
@@ -169,6 +172,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
+	}
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case "", "text":
+			// The empty / text format is the provider default.
+		case "json_object":
+			gwReq.ResponseFormat = req.ResponseFormat.Type
+		default:
+			writeAPIError(w, http.StatusBadRequest, "invalid_response_format", "response_format.type must be text or json_object")
+			return
+		}
 	}
 	for _, m := range req.Messages {
 		gwReq.Messages = append(gwReq.Messages, llmcall.Message{Role: m.Role, Content: m.Content, Name: m.Name})

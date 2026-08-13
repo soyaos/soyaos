@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -45,7 +46,15 @@ var defaultClient = &http.Client{
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second, // upstream must send headers within 60s
+		// ResponseHeaderTimeout is the wall clock between request send and
+		// the upstream's first response byte. Streaming endpoints answer in
+		// 1-2s, but a non-streaming /chat/completions on DashScope qwen-plus
+		// can wait until the *whole* 2-3 KB JSON is generated before
+		// flushing headers — that's 60-120s. The chain runner runs all
+		// intermediate stages streaming-internally (pack_agent.streamCollect)
+		// to avoid this, but we keep a generous header timeout as the
+		// belt-and-braces fallback for direct non-streaming Generate calls.
+		ResponseHeaderTimeout: 180 * time.Second,
 	},
 }
 
@@ -60,8 +69,8 @@ func (p OpenAICompat) Name() string {
 
 // Generate posts a non-stream chat completion to <base_url>/chat/completions.
 // The request body is the standard OpenAI shape; only Model / Messages /
-// Temperature / MaxTokens are forwarded since those are what pkg/llmcall.
-// Request exposes today.
+// Temperature / MaxTokens / ResponseFormat are forwarded since those are
+// what pkg/llmcall.Request exposes today.
 func (p OpenAICompat) Generate(ctx context.Context, req Request) (Response, error) {
 	body, err := p.buildBody(req, false)
 	if err != nil {
@@ -176,6 +185,15 @@ func (p OpenAICompat) GenerateStream(ctx context.Context, req Request, out chan<
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		// Wrap io.ErrUnexpectedEOF specifically so callers (chain runner,
+		// action handler) can errors.Is() and retry it as a transient
+		// network condition. Long SSE streams against DashScope reasoning
+		// models occasionally get torn down by an intermediate hop while
+		// the model is still thinking — there's no application-level
+		// signal, just a half-closed TCP. Retry is the right answer.
+		if errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF") {
+			return fmt.Errorf("llmcall: read upstream stream: %w", io.ErrUnexpectedEOF)
+		}
 		return fmt.Errorf("llmcall: read upstream stream: %w", err)
 	}
 	select {
@@ -201,6 +219,15 @@ func (p OpenAICompat) buildBody(req Request, stream bool) ([]byte, error) {
 	}
 	if req.MaxTokens != 0 {
 		payload["max_tokens"] = req.MaxTokens
+	}
+	if req.ResponseFormat != "" {
+		payload["response_format"] = map[string]string{"type": req.ResponseFormat}
+	}
+	// enable_thinking is intentionally opt-in. It is supported by several
+	// OpenAI-compatible vendors but is not part of the OpenAI standard; an
+	// unset config must therefore omit the field rather than send false.
+	if p.Cfg.EnableThinking != nil {
+		payload["enable_thinking"] = *p.Cfg.EnableThinking
 	}
 	return json.Marshal(payload)
 }

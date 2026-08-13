@@ -12,7 +12,8 @@
 #   6. soyaos agent build <example-essay-tutor> → ./dist/*.spk + .sha256
 #   7. soyaos agent deploy <dist/*.spk> --rpc 127.0.0.1:7495
 #   8. curl /v1/models — the deployed virtual_model_id must appear
-#   9. curl /v1/chat/completions — fire a real prompt at the deployed agent
+#   9. curl /v1/chat/completions — one real non-thinking prompt; validate
+#      guide.v1; render JSON/HTML/PDF; enforce the 30-second total budget
 #  10. restart soyaos (kill+start, same data-dir) → boot-time reload registers
 #      the deployed pack again, /v1/models still lists it
 #  11. teardown + ✅ summary
@@ -38,7 +39,9 @@ BASE="http://${LISTEN}"
 RPC_BASE="http://${RPC}"
 KEY="sk-soya-dev-local"
 EXAMPLE_PACK="${EXAMPLE_PACK:-/Users/zealot/workspace/soyaos/example-essay-tutor}"
-LLM_TIMEOUT_S="${LLM_TIMEOUT_S:-300}"
+LLM_TIMEOUT_S="${LLM_TIMEOUT_S:-35}"
+RENDER_GUIDE="$DATA/render-guide"
+ARTIFACT_OUT="${COMPO_OUTPUT_DIR:-$EXAMPLE_PACK/trial-output}"
 
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; RESET=$'\033[0m'
 
@@ -78,10 +81,8 @@ stop_soyaos() {
 
 # -----------------------------------------------------------------------------
 step "Step 1 · Ensure ./bin/soyaos is built"
-if [[ ! -x ./bin/soyaos ]]; then
-  note "binary missing — running make build"
-  make build || bad "make build failed"
-fi
+note "building the current checkout so the E2E cannot reuse a stale binary"
+make build || bad "make build failed"
 ok "binary: $(./bin/soyaos version 2>&1 | head -1)"
 
 # -----------------------------------------------------------------------------
@@ -89,13 +90,16 @@ step "Step 2 · .env must define SOYA_MODEL_API_KEY"
 if [[ ! -f .env ]]; then
   bad ".env not found — copy .env.example and fill SOYA_MODEL_API_KEY"
 fi
-# shellcheck disable=SC2046
-export $(grep -v '^#' .env | grep -v '^$' | xargs -I{} echo {})
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
 if [[ -z "${SOYA_MODEL_API_KEY:-}" ]]; then
   bad "SOYA_MODEL_API_KEY is empty after sourcing .env"
 fi
+export SOYA_MODEL_ENABLE_THINKING=false
 note "upstream: ${SOYA_MODEL_BASE_URL:-https://api.openai.com/v1} · model=${SOYA_MODEL_DEFAULT:-gpt-4o-mini}"
-ok "BYOK env loaded"
+ok "BYOK env loaded · parent-trial thinking disabled"
 
 # -----------------------------------------------------------------------------
 step "Step 3 · Example pack: $EXAMPLE_PACK"
@@ -107,6 +111,10 @@ PACK_NAME=$(grep -E '^name:' "$EXAMPLE_PACK/soyapack.yaml" | head -1 | sed 's/^n
 PACK_VERSION=$(grep -E '^version:' "$EXAMPLE_PACK/soyapack.yaml" | head -1 | sed 's/^version:[[:space:]]*//')
 [[ -n "$VIRTUAL_MODEL_ID" ]] || bad "could not parse virtual_model_id from manifest"
 note "manifest declares name=$PACK_NAME version=$PACK_VERSION virtual_model_id=$VIRTUAL_MODEL_ID"
+if ! (cd "$EXAMPLE_PACK/e2e" && go build -o "$RENDER_GUIDE" ./cmd/render-guide); then
+  bad "could not build the guide.v1 artifact renderer"
+fi
+ok "guide.v1 validator + HTML/PDF renderer built"
 
 # -----------------------------------------------------------------------------
 step "Step 4 · Boot soyaos on $LISTEN (data → $DATA)"
@@ -150,14 +158,15 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-step "Step 9 · /v1/chat/completions · real LLM round-trip through $VIRTUAL_MODEL_ID"
+step "Step 9 · Real fast path · guide.v1 + HTML/PDF within 30 seconds"
 START=$(date +%s)
 PROMPT_BODY=$(cat <<JSON
 {
   "model": "$VIRTUAL_MODEL_ID",
   "stream": false,
+  "response_format": {"type": "json_object"},
   "messages": [
-    {"role": "user", "content": "下面是一段范文：\\n\\n春天来了，校园里的玉兰花开了，白色的花瓣像小船一样停在枝头。我每天上学都会绕到花树下走一圈。\\n\\n请你按系统提示给出结构化分析。"}
+    {"role": "user", "content": "标题：校园的玉兰花\\n年级：小学三年级\\n范文：春天来了，校园里的玉兰花开了，白色的花瓣像小船一样停在枝头。我每天上学都会绕到花树下走一圈。\\n请生成可直接辅导孩子的完整写作指引。"}
   ]
 }
 JSON
@@ -165,7 +174,6 @@ JSON
 ANSWER=$(curl -sS --max-time "$LLM_TIMEOUT_S" "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d "$PROMPT_BODY") || bad "curl /v1/chat/completions failed (timeout=${LLM_TIMEOUT_S}s)"
-ELAPSED=$(( $(date +%s) - START ))
 echo "$ANSWER" | jq .
 CONTENT=$(echo "$ANSWER" | jq -r '.choices[0].message.content // empty')
 if [[ -z "$CONTENT" ]]; then
@@ -177,10 +185,21 @@ echo "${CONTENT:0:400}"
 echo
 # Verify it actually went through an LLM (contains CJK characters).
 if echo "$CONTENT" | LC_ALL=C grep -q '[^[:print:][:space:]]'; then
-  ok "round-trip ${ELAPSED}s · response contains non-ASCII (CJK) bytes — real LLM"
+  ok "response contains non-ASCII (CJK) bytes — real LLM"
 else
   warn "response is all ASCII — upstream may have returned English; spot-check manually"
 fi
+if ! printf '%s' "$CONTENT" | "$RENDER_GUIDE" --templates "$EXAMPLE_PACK/templates" --out "$ARTIFACT_OUT"; then
+  bad "real response failed guide.v1 validation or HTML/PDF rendering"
+fi
+ELAPSED=$(( $(date +%s) - START ))
+if (( ELAPSED > 30 )); then
+  bad "parent-trial total latency ${ELAPSED}s exceeds the 30-second budget"
+fi
+[[ -s "$ARTIFACT_OUT/guide.json" ]] || bad "guide.json is missing"
+[[ -s "$ARTIFACT_OUT/guide.html" ]] || bad "guide.html is missing"
+[[ -s "$ARTIFACT_OUT/guide.pdf" ]] || bad "guide.pdf is missing"
+ok "real guide validated and rendered in ${ELAPSED}s (≤30s)"
 
 # -----------------------------------------------------------------------------
 step "Step 10 · Restart soyaos · deployed pack must re-load from $DATA/packs/"
@@ -205,3 +224,4 @@ ok "SoyaPack lifecycle E2E passed"
 note "logs: $LOG"
 note "data: $DATA (will be deleted on exit)"
 note "spk:  $SPK_PATH ($SPK_BYTES bytes, sha256=$SPK_SHA)"
+note "trial outputs: $ARTIFACT_OUT/{guide.json,guide.html,guide.pdf}"

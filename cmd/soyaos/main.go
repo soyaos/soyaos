@@ -114,6 +114,9 @@ Environment (all optional — soyaos boots with zero config):
   SOYA_MODEL_DEFAULT              upstream model id used when the caller
                                   targets a "soya:*" virtual model id.
                                   Default: gpt-4o-mini
+  SOYA_MODEL_ENABLE_THINKING      optional true/false vendor extension for
+                                  mixed-thinking OpenAI-compatible models.
+                                  Unset by default (field omitted upstream).
   SOYAOS_CHROME                   Chrome binary path override for PDF /
                                   long_image artifact renderers.
 

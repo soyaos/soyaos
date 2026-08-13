@@ -2,6 +2,7 @@ package llmcall
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/soyaos/soyaos/pkg/soyapack"
@@ -15,6 +16,11 @@ const (
 	EnvAPIKey  = "SOYA_MODEL_API_KEY"
 	EnvBaseURL = "SOYA_MODEL_BASE_URL"
 	EnvModel   = "SOYA_MODEL_DEFAULT"
+	// EnvEnableThinking is an optional OpenAI-compatible vendor extension.
+	// When unset, SoyaOS omits enable_thinking entirely so strict upstreams
+	// continue to receive the standard OpenAI request shape. Operators using
+	// mixed-thinking models (for example Qwen3.x) can set true or false.
+	EnvEnableThinking = "SOYA_MODEL_ENABLE_THINKING"
 )
 
 // Defaults applied by LoadConfigFromEnv when the corresponding env var is
@@ -35,9 +41,10 @@ const (
 // answers — so the operator's path to "talk to a real model" is exactly
 // "export SOYA_MODEL_API_KEY".
 type Config struct {
-	APIKey  string
-	BaseURL string
-	Model   string
+	APIKey         string
+	BaseURL        string
+	Model          string
+	EnableThinking *bool
 }
 
 // LoadConfigFromEnv reads the three SOYA_MODEL_* env vars and applies the
@@ -48,6 +55,11 @@ func LoadConfigFromEnv() Config {
 		APIKey:  os.Getenv(EnvAPIKey),
 		BaseURL: os.Getenv(EnvBaseURL),
 		Model:   os.Getenv(EnvModel),
+	}
+	if raw := strings.TrimSpace(os.Getenv(EnvEnableThinking)); raw != "" {
+		if value, err := strconv.ParseBool(raw); err == nil {
+			cfg.EnableThinking = &value
+		}
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = DefaultBaseURL

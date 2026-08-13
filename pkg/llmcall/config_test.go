@@ -13,11 +13,32 @@ func TestResolveConfig_NilDeclEqualsEnv(t *testing.T) {
 	t.Setenv(EnvAPIKey, "sk-env")
 	t.Setenv(EnvBaseURL, "https://api.openai.com/v1")
 	t.Setenv(EnvModel, "gpt-4o-mini")
+	t.Setenv(EnvEnableThinking, "")
 
 	got := ResolveConfig(nil)
 	want := LoadConfigFromEnv()
 	if got != want {
 		t.Fatalf("ResolveConfig(nil) = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadConfigFromEnvOptionalThinking(t *testing.T) {
+	t.Setenv(EnvEnableThinking, "")
+	if got := LoadConfigFromEnv().EnableThinking; got != nil {
+		t.Fatalf("unset %s = %v, want nil", EnvEnableThinking, *got)
+	}
+
+	t.Setenv(EnvEnableThinking, "false")
+	got := LoadConfigFromEnv().EnableThinking
+	if got == nil || *got {
+		t.Fatalf("%s=false = %v, want pointer to false", EnvEnableThinking, got)
+	}
+
+	// Invalid values are ignored instead of leaking a malformed vendor
+	// extension into every upstream request.
+	t.Setenv(EnvEnableThinking, "sometimes")
+	if got := LoadConfigFromEnv().EnableThinking; got != nil {
+		t.Fatalf("invalid %s should be ignored, got %v", EnvEnableThinking, *got)
 	}
 }
 
