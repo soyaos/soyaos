@@ -84,5 +84,9 @@ clean:
 	rm -rf $(BIN_DIR)
 	go clean -cache -testcache 2>/dev/null || true
 
+.PHONY: test-module-release
+test-module-release:
+	python3 -m unittest scripts/test_module_release.py
+
 .PHONY: ci
-ci: tidy-check fmt-check vet test test-independent build
+ci: tidy-check fmt-check vet test test-independent test-module-release build
