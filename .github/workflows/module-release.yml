@@ -13,11 +13,16 @@ on:
         description: Base commit used to identify a module manifest release diff
         required: false
         type: string
+      target_ref:
+        description: Commit that receives recovered module tags (default HEAD)
+        required: false
+        type: string
 
 permissions:
   actions: write
   contents: write
   pull-requests: write
+  statuses: write
 
 concurrency:
   group: module-release-main
@@ -71,10 +76,15 @@ jobs:
 
       - name: Publish immutable module tags
         if: steps.classify.outputs.mode == 'publish'
+        env:
+          INPUT_TARGET: ${{ inputs.target_ref }}
         run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          target_ref="${INPUT_TARGET:-HEAD}"
           python3 scripts/module_release.py publish \
             --base-ref "${{ steps.classify.outputs.base-ref }}" \
-            --target-ref HEAD \
+            --target-ref "${target_ref}" \
             --push \
             --json-output /tmp/published-modules.json
 
@@ -188,6 +198,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: automation/module-release
-        run: |
-          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref "${BRANCH}" -f module_release_pr=true
-          gh workflow run matrix-build.yml --repo "${GITHUB_REPOSITORY}" --ref "${BRANCH}" -f module_release_pr=true
+        run: scripts/dispatch_protected_checks.sh "${BRANCH}" true
