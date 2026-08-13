@@ -14,7 +14,7 @@ require (
 	github.com/soyaos/soyaos/pkg/scope v0.1.0-alpha.0
 	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.0
 	github.com/soyaos/soyaos/pkg/store v0.1.0-alpha.0
-	github.com/soyaos/soyaos/pkg/version v0.1.0-alpha.0
+	github.com/soyaos/soyaos/pkg/version v0.1.0-alpha.2
 )
 
 require (
