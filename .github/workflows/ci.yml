@@ -78,8 +78,15 @@ jobs:
 
       - name: docker build
         if: matrix.os == 'ubuntu-latest'
+        env:
+          MODULE_RELEASE_PR: ${{ inputs.module_release_pr }}
         run: |
+          independent_module_download=true
+          if [ "${MODULE_RELEASE_PR}" = "true" ]; then
+            independent_module_download=false
+          fi
           docker build \
             --build-arg VERSION=ci \
             --build-arg GITSHA="${GITHUB_SHA::12}" \
+            --build-arg INDEPENDENT_MODULE_DOWNLOAD="${independent_module_download}" \
             -t soyaos:ci .
