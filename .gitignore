@@ -43,3 +43,7 @@ web/dist/
 # node / bun (when frontend is added later)
 node_modules/
 .bun/
+
+# Python tooling caches
+__pycache__/
+*.py[cod]

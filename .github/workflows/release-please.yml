@@ -10,6 +10,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: write
   contents: write
   issues: write
   pull-requests: write
@@ -31,6 +32,18 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+
+      - name: Dispatch protected checks for release PRs
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r branch; do
+            gh workflow run ci.yml --ref "${branch}"
+            gh workflow run matrix-build.yml --ref "${branch}"
+          done < <(jq -r '.[].headBranchName' <<< "${RELEASE_PRS}")
 
   publish:
     name: publish release assets and image

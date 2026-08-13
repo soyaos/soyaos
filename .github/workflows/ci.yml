@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      module_release_pr:
+        description: Simulate pending module tags for a generated release PR
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +30,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Prepare pending module tags
+        if: github.event_name == 'workflow_dispatch' && inputs.module_release_pr
+        run: |
+          python3 scripts/module_release.py local-tags --base-ref origin/main
+          git config --global protocol.file.allow always
+          git config --global url."file://${GITHUB_WORKSPACE}/".insteadOf "https://github.com/soyaos/soyaos"
+          echo 'GIT_ALLOW_PROTOCOL=file:https:http:ssh:git' >> "${GITHUB_ENV}"
+          echo 'GONOPROXY=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GONOSUMDB=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GOPROXY=https://proxy.golang.org,direct' >> "${GITHUB_ENV}"
+          echo 'GOTOOLCHAIN=local' >> "${GITHUB_ENV}"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -35,6 +54,9 @@ jobs:
           test ! -e go.mod
           test "$(go list -m | wc -l | tr -d ' ')" = "26"
           test "$(find cmd pkg -mindepth 2 -maxdepth 2 -name go.mod | wc -l | tr -d ' ')" = "26"
+
+      - name: Test module release planner
+        run: python3 -m unittest scripts/test_module_release.py
 
       - name: Verify module tidiness
         run: make tidy-check
