@@ -119,7 +119,14 @@ func BuildRemotionExecuteRequest(spec RemotionRenderSpec) (runtime.ExecuteReques
 		// remotion-cli normalizes internally.
 		args = append(args, "--quality="+itoa(spec.Quality))
 	}
-	return runtime.ExecuteRequest{Cmd: args}, nil
+	access := runtime.Access{
+		FSRead:  []string{spec.EntryPoint},
+		FSWrite: []string{spec.OutputPath},
+	}
+	if spec.PropsPath != "" {
+		access.FSRead = append(access.FSRead, spec.PropsPath)
+	}
+	return runtime.ExecuteRequest{Cmd: args, Access: &access}, nil
 }
 
 // itoa is a small fast int-to-string helper — used a handful of times,

@@ -13,12 +13,15 @@ func TestProvider_WithUsage_TicksAggregator(t *testing.T) {
 	agg := scope.NewUsageAggregator(nil)
 	p := New().WithUsage(agg)
 	ctx := context.Background()
-	h, _ := p.Provision(ctx, runtime.ProvisionRequest{Image: "video-base@0.1.0"})
+	h, _ := p.Provision(ctx, runtime.ProvisionRequest{
+		Image: "video-base@0.1.0",
+		Caps:  runtime.Caps{Exec: []string{"sh"}},
+	})
 	if err := p.LabelHandle(h, "sk_abc", "silentcut"); err != nil {
 		t.Fatalf("LabelHandle: %v", err)
 	}
 	// Sleep long enough for at least two 100ms ticks.
-	if _, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"sh", "-c", "sleep 0.3"}}); err != nil {
+	if _, err := p.Execute(ctx, h, runtime.ExecuteRequest{Cmd: []string{"sh", "-c", "sleep 0.3"}, Access: &runtime.Access{}}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	rows, err := agg.Query(ctx, scope.UsageQuery{})
