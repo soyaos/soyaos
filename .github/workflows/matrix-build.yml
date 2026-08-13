@@ -9,7 +9,13 @@ on:
   push:
     branches: [main]
   pull_request: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      module_release_pr:
+        description: Simulate pending module tags for a generated release PR
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -31,6 +37,8 @@ jobs:
       - name: Checkout
         if: matrix.edition == 'solo'
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         if: matrix.edition == 'solo'
@@ -39,6 +47,17 @@ jobs:
           go-version: '1.22'
           cache: true
           cache-dependency-path: '**/go.sum'
+
+      - name: Prepare pending module tags
+        if: matrix.edition == 'solo' && github.event_name == 'workflow_dispatch' && inputs.module_release_pr
+        run: |
+          python3 scripts/module_release.py local-tags --base-ref origin/main
+          git config --global protocol.file.allow always
+          git config --global url."file://${GITHUB_WORKSPACE}/".insteadOf "https://github.com/soyaos/soyaos"
+          echo 'GIT_ALLOW_PROTOCOL=file:https:http:ssh:git' >> "${GITHUB_ENV}"
+          echo 'GONOPROXY=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GONOSUMDB=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GOPROXY=https://proxy.golang.org,direct' >> "${GITHUB_ENV}"
 
       - name: Build
         if: matrix.edition == 'solo'
