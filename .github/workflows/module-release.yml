@@ -1,0 +1,210 @@
+# Owner: release-eng
+# Purpose: Plan and publish independently versioned Go modules without changing
+# the root release-please binary/SBOM/Sigstore/GHCR pipeline.
+
+name: module-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base commit used to identify a module manifest release diff
+        required: false
+        type: string
+      target_ref:
+        description: Commit that receives recovered module tags (default HEAD)
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: module-release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: plan or publish Go modules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main with tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+          cache-dependency-path: '**/go.sum'
+
+      - name: Test module release planner
+        run: python3 -m unittest scripts/test_module_release.py
+
+      - name: Classify main update
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          INPUT_BASE: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          base_ref="${INPUT_BASE:-${EVENT_BEFORE:-HEAD^}}"
+          if [[ "${base_ref}" =~ ^0+$ ]] || ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
+            base_ref="HEAD^"
+          fi
+          python3 scripts/module_release.py changes \
+            --base-ref "${base_ref}" \
+            --json-output /tmp/manifest-changes.json
+          bootstrap="$(jq -r .bootstrap /tmp/manifest-changes.json)"
+          changed="$(jq '.modules | length' /tmp/manifest-changes.json)"
+          if [[ "${bootstrap}" == "false" && "${changed}" -gt 0 ]]; then
+            mode=publish
+          else
+            mode=plan
+          fi
+          echo "base-ref=${base_ref}" >> "${GITHUB_OUTPUT}"
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "mode=${mode}, base=${base_ref}, changed=${changed}, bootstrap=${bootstrap}"
+
+      - name: Publish immutable module tags
+        if: steps.classify.outputs.mode == 'publish'
+        env:
+          INPUT_TARGET: ${{ inputs.target_ref }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          target_ref="${INPUT_TARGET:-HEAD}"
+          python3 scripts/module_release.py publish \
+            --base-ref "${{ steps.classify.outputs.base-ref }}" \
+            --target-ref "${target_ref}" \
+            --push \
+            --json-output /tmp/published-modules.json
+
+      - name: Delete merged module release branch
+        if: steps.classify.outputs.mode == 'publish'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/automation/module-release" || true
+
+      - name: Verify published modules independently
+        if: steps.classify.outputs.mode == 'publish'
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+          GONOPROXY: github.com/soyaos/soyaos/*
+          GONOSUMDB: github.com/soyaos/soyaos/*
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          while IFS= read -r module_dir; do
+            echo "==> ${module_dir}"
+            (
+              cd "${module_dir}"
+              GOWORK=off go mod tidy
+              GOWORK=off go test -count=1 ./...
+            )
+          done < <(jq -r '.order[]' /tmp/published-modules.json)
+          git diff --exit-code -- ':(glob)**/go.mod' ':(glob)**/go.sum'
+
+      - name: Verify one module through the public Go proxy
+        if: steps.classify.outputs.mode == 'publish'
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          module="$(jq -r '[.modules[] | select(.directory | startswith("pkg/"))][0].module // .modules[0].module' /tmp/published-modules.json)"
+          version="$(jq -r '[.modules[] | select(.directory | startswith("pkg/"))][0].next // .modules[0].next' /tmp/published-modules.json)"
+          toy="$(mktemp -d)"
+          cd "${toy}"
+          go mod init example.com/soyaos-module-release-smoke
+          # proxy.golang.org may retain a negative lookup for roughly 15
+          # minutes when the version is queried just before its tag arrives.
+          # Keep polling long enough to outlive that cache, while succeeding
+          # immediately once the immutable tag is indexed.
+          max_attempts=80
+          retry_delay_seconds=15
+          for attempt in $(seq 1 "${max_attempts}"); do
+            if GOPROXY=https://proxy.golang.org go mod download -json "${module}@${version}" > module.json; then
+              echo "public Go proxy indexed ${module}@${version} on attempt ${attempt}"
+              break
+            fi
+            error="$(jq -r '.Error // "unknown proxy error"' module.json 2>/dev/null || echo 'unreadable proxy response')"
+            echo "public Go proxy attempt ${attempt}/${max_attempts}: ${error}" >&2
+            if [[ "${attempt}" -eq "${max_attempts}" ]]; then
+              echo "public Go proxy did not index ${module}@${version}" >&2
+              exit 1
+            fi
+            sleep "${retry_delay_seconds}"
+          done
+          jq -e --arg module "${module}" --arg version "${version}" \
+            '.Path == $module and .Version == $version and (.Sum | length > 0)' module.json
+
+      - name: Compute module release plan
+        if: steps.classify.outputs.mode == 'plan'
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 scripts/module_release.py plan \
+            --write \
+            --json-output /tmp/module-plan.json \
+            --markdown /tmp/module-release-pr.md
+          count="$(jq '.modules | length' /tmp/module-plan.json)"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+          echo "planned ${count} module release(s)"
+
+      - name: Seal reproducible release commit
+        if: steps.classify.outputs.mode == 'plan' && steps.plan.outputs.count != '0'
+        run: scripts/seal-module-release.sh HEAD /tmp/module-plan.json
+
+      - name: Push release PR branch
+        if: steps.classify.outputs.mode == 'plan' && steps.plan.outputs.count != '0'
+        env:
+          BRANCH: automation/module-release
+        run: |
+          set -euo pipefail
+          git fetch origin "${BRANCH}" || true
+          lease=()
+          if old="$(git rev-parse "origin/${BRANCH}" 2>/dev/null)"; then
+            lease=("--force-with-lease=refs/heads/${BRANCH}:${old}")
+          fi
+          git push "${lease[@]}" origin "HEAD:refs/heads/${BRANCH}"
+
+      - name: Create or update module release PR
+        if: steps.classify.outputs.mode == 'plan' && steps.plan.outputs.count != '0'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: automation/module-release
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --head "${BRANCH}" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "${number}" ]]; then
+            url="$(gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "chore(modules): release Go modules" \
+              --body-file /tmp/module-release-pr.md)"
+            number="${url##*/}"
+          else
+            gh pr edit "${number}" \
+              --title "chore(modules): release Go modules" \
+              --body-file /tmp/module-release-pr.md
+          fi
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Dispatch protected CI without a PAT
+        if: steps.classify.outputs.mode == 'plan' && steps.plan.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: automation/module-release
+        run: scripts/dispatch_protected_checks.sh "${BRANCH}" true

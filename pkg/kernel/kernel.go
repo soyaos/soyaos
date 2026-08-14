@@ -25,6 +25,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/llmcall"
 	"github.com/soyaos/soyaos/pkg/soyapack"
+	"github.com/soyaos/soyaos/pkg/state"
 )
 
 // VirtualModelPrefix is the locked-in prefix for SoyaOS-hosted virtual
@@ -56,6 +57,12 @@ var ErrUnknownAgent = errors.New("kernel: unknown agent / model id")
 type Kernel struct {
 	mu     sync.RWMutex
 	agents map[string]Agent // keyed by full model id ("soya:echo")
+
+	// Stateful Packs persist their latest completion and row payloads through
+	// this host-provided store. The Solo host wires a bbolt-backed instance;
+	// tests and embedded hosts may supply any implementation of state.Store.
+	stateMu    sync.RWMutex
+	stateStore state.Store
 
 	// Per-row Action dispatch (APP-502). Lock is separate from `mu` so an
 	// in-flight action does not block agent registration / lookup.
@@ -343,7 +350,11 @@ func (k *Kernel) ChatCompletion(ctx context.Context, id auth.Identity, req llmca
 	if err := <-errCh; err != nil {
 		return llmcall.Response{}, err
 	}
-	return llmcall.Response{Model: agent.ModelID(), Content: sb.String()}, nil
+	content := sb.String()
+	if err := k.persistAgentCompletion(ctx, agent, id, content); err != nil {
+		return llmcall.Response{}, err
+	}
+	return llmcall.Response{Model: agent.ModelID(), Content: content}, nil
 }
 
 // ChatCompletionStream drives a streaming completion. Chunks are written to
@@ -354,5 +365,33 @@ func (k *Kernel) ChatCompletionStream(ctx context.Context, id auth.Identity, req
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownAgent, req.Model)
 	}
-	return agent.Handler(ctx, id, req, out)
+
+	inner := make(chan llmcall.Chunk, 8)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- agent.Handler(ctx, id, req, inner)
+		close(inner)
+	}()
+
+	var content strings.Builder
+	var done *llmcall.Chunk
+	for chunk := range inner {
+		if chunk.Done {
+			copy := chunk
+			done = &copy
+			continue
+		}
+		content.WriteString(chunk.Delta)
+		out <- chunk
+	}
+	if err := <-errCh; err != nil {
+		return err
+	}
+	if err := k.persistAgentCompletion(ctx, agent, id, content.String()); err != nil {
+		return err
+	}
+	if done != nil {
+		out <- *done
+	}
+	return nil
 }

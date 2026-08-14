@@ -8,7 +8,7 @@
 bin/
 
 # Studio dev sourcemaps — embedded assets ship without them.
-internal/studio/dist/*.map
+cmd/soyaos/internal/studio/dist/*.map
 
 # Local secrets (these should never be in git, belt-and-suspenders).
 .env

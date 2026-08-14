@@ -178,6 +178,22 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 		Payload:   payload,
 		Identity:  id,
 	}
+	stored, err := k.loadRowPayload(ctx, agent, id, rowID)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if stored != nil {
+		// Caller fields may carry action-specific options, but the persisted
+		// workbook row is authoritative for the original topic context.
+		merged := make(map[string]any, len(payload)+len(stored))
+		for key, value := range payload {
+			merged[key] = value
+		}
+		for key, value := range stored {
+			merged[key] = value
+		}
+		req.Payload = merged
+	}
 	return h(ctx, decl, req)
 }
 

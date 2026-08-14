@@ -11,6 +11,7 @@
 //	soyaos agent create <name>    scaffold a SoyaPack v0 Agent
 //	soyaos agent list             list registered Agents (talks to a running soyaos)
 //	soyaos agent run <slug> "..." invoke an Agent once (talks to a running soyaos)
+//	soyaos agent invoke <slug> "..." [--artifact xlsx --output FILE]
 //	soyaos agent build [<path>]   build a canonical SoyaPack v0 .spk archive
 //	soyaos agent deploy <pack>    register a built .spk with a running soyaos
 //	soyaos pack validate <path>   parse + validate a SoyaPack v0 manifest
@@ -38,8 +39,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/soyaos/soyaos/internal/buildinfo"
-	"github.com/soyaos/soyaos/internal/studio"
+	"github.com/soyaos/soyaos/cmd/soyaos/internal/buildinfo"
+	"github.com/soyaos/soyaos/cmd/soyaos/internal/studio"
+	"github.com/soyaos/soyaos/pkg/artifact"
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/connectors/dingtalk"
 	"github.com/soyaos/soyaos/pkg/control"
@@ -50,6 +52,7 @@ import (
 	"github.com/soyaos/soyaos/pkg/scheduler"
 	"github.com/soyaos/soyaos/pkg/scope"
 	"github.com/soyaos/soyaos/pkg/soyapack"
+	"github.com/soyaos/soyaos/pkg/state"
 	"github.com/soyaos/soyaos/pkg/store"
 	"github.com/soyaos/soyaos/pkg/version"
 )
@@ -101,6 +104,8 @@ Usage:
   soyaos agent list [--rpc URL]   list Agents registered with a running soyaos
   soyaos agent run <slug> "<prompt>" [--listen URL]
                                   invoke an Agent and print its response
+  soyaos agent invoke <slug> "<prompt>" [--artifact xlsx --output FILE]
+                                  invoke and optionally render a real artifact
   soyaos agent build [<path>]     build a canonical SoyaPack v0 .spk archive
   soyaos agent deploy <pack> [--rpc URL]
                                   upload a built .spk to a running soyaos
@@ -174,6 +179,7 @@ func cmdStart(args []string) error {
 	devKey := keys.SeedDevKey()
 
 	k := kernel.New()
+	k.SetStateStore(state.NewBoltStore(soyaStore))
 	k.Register(kernel.EchoAgent)
 	k.SetLogger(func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "[kernel] "+format+"\n", args...)
@@ -356,7 +362,7 @@ func defaultDataDir() string {
 
 func cmdAgent(args []string) error {
 	if len(args) < 1 {
-		return errors.New("agent: missing subcommand (try: list / create / run / build / deploy)")
+		return errors.New("agent: missing subcommand (try: list / create / run / invoke / build / deploy)")
 	}
 	switch args[0] {
 	case "list":
@@ -365,6 +371,8 @@ func cmdAgent(args []string) error {
 		return cmdAgentCreate(args[1:])
 	case "run":
 		return cmdAgentRun(args[1:])
+	case "invoke":
+		return cmdAgentInvoke(args[1:])
 	case "build":
 		return cmdAgentBuild(args[1:])
 	case "deploy":
@@ -415,26 +423,72 @@ func cmdAgentRun(args []string) error {
 		return errors.New("agent run: expected <slug> \"<prompt>\"")
 	}
 	slug, prompt := rest[0], strings.Join(rest[1:], " ")
+	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey)
+	if err != nil {
+		return err
+	}
+	fmt.Println(content)
+	return nil
+}
+
+func cmdAgentInvoke(args []string) error {
+	fs := flag.NewFlagSet("agent invoke", flag.ContinueOnError)
+	listen := fs.String("listen", "http://"+openaicompat.DefaultListenAddr, "OpenAI-Compat gateway base URL")
+	apiKey := fs.String("key", "sk-soya-dev-local", "API key for authentication")
+	artifactKind := fs.String("artifact", "", "artifact kind to render (currently: xlsx)")
+	output := fs.String("output", "", "artifact output file")
+	schema := fs.String("schema", "topics.v1", "artifact schema identifier")
+	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 2 {
+		return errors.New("agent invoke: expected <slug> \"<prompt>\"")
+	}
+	if *artifactKind != "" && *artifactKind != "xlsx" {
+		return fmt.Errorf("agent invoke: unsupported artifact %q (currently: xlsx)", *artifactKind)
+	}
+	if *artifactKind != "" && *output == "" {
+		return errors.New("agent invoke: --output is required when --artifact is set")
+	}
+
+	slug, prompt := rest[0], strings.Join(rest[1:], " ")
+	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey)
+	if err != nil {
+		return err
+	}
+	if *artifactKind == "" {
+		fmt.Println(content)
+		return nil
+	}
+	if err := renderXLSXArtifact(content, *schema, *output); err != nil {
+		return err
+	}
+	fmt.Printf("rendered %s · schema=%s\n", *output, *schema)
+	return nil
+}
+
+func requestAgentCompletion(slug, prompt, listen, apiKey string) (string, error) {
 
 	body, _ := json.Marshal(map[string]any{
 		"model":    "soya:" + strings.TrimPrefix(slug, "soya:"),
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
 	})
-	req, err := http.NewRequest(http.MethodPost, *listen+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(listen, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+*apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("contact gateway at %s: %w (is soyaos running?)", *listen, err)
+		return "", fmt.Errorf("contact gateway at %s: %w (is soyaos running?)", listen, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gateway returned %d: %s", resp.StatusCode, raw)
+		return "", fmt.Errorf("gateway returned %d: %s", resp.StatusCode, raw)
 	}
 	var out struct {
 		Choices []struct {
@@ -444,12 +498,46 @@ func cmdAgentRun(args []string) error {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return err
+		return "", err
 	}
 	if len(out.Choices) == 0 {
-		return errors.New("agent run: empty response")
+		return "", errors.New("agent invocation returned an empty response")
 	}
-	fmt.Println(out.Choices[0].Message.Content)
+	return out.Choices[0].Message.Content, nil
+}
+
+func renderXLSXArtifact(content, schema, output string) error {
+	body := strings.TrimSpace(content)
+	if strings.HasPrefix(body, "```") {
+		if newline := strings.IndexByte(body, '\n'); newline >= 0 {
+			body = body[newline+1:]
+		}
+		body = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(body), "```"))
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(body), &snapshot); err != nil {
+		return fmt.Errorf("agent invoke: response is not a valid xlsx snapshot: %w", err)
+	}
+	outputDir := filepath.Dir(output)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("agent invoke: create output directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(outputDir, "."+filepath.Base(output)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("agent invoke: create temporary artifact: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := (artifact.XLSXRenderer{Schema: schema}).Render(context.Background(), snapshot, tmp); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("agent invoke: render xlsx: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("agent invoke: close xlsx: %w", err)
+	}
+	if err := os.Rename(tmpPath, output); err != nil {
+		return fmt.Errorf("agent invoke: publish xlsx: %w", err)
+	}
 	return nil
 }
 

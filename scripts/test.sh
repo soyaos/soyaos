@@ -8,27 +8,24 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo ">> go mod tidy"
-go mod tidy
+echo ">> module tidy check"
+make tidy-check
 
 echo ">> gofmt check"
-fmt_out=$(gofmt -l -s .)
-if [ -n "$fmt_out" ]; then
-  echo "gofmt issues:"
-  echo "$fmt_out"
-  echo "Run: gofmt -w -s ."
-  exit 1
-fi
+make fmt-check
 
 echo ">> go vet"
-go vet ./...
+make vet
 
 echo ">> go test (race)"
-go test -race -count=1 ./...
+make test
+
+echo ">> independent module tests (GOWORK=off)"
+make test-independent
 
 echo ">> go build"
 mkdir -p bin
-go build -trimpath -o bin/soyaos ./cmd/soyaos
+make build
 
 echo
 echo "OK — bin/soyaos built"

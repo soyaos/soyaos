@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      module_release_pr:
+        description: Simulate pending module tags for a generated release PR
+        required: false
+        default: false
+        type: boolean
+      module_release_base_ref:
+        description: Optional historical base for a recovered module release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,27 +39,61 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+          cache-dependency-path: '**/go.sum'
+
+      - name: Prepare pending module tags
+        if: github.event_name == 'workflow_dispatch' && inputs.module_release_pr
+        env:
+          MODULE_RELEASE_BASE_REF: ${{ inputs.module_release_base_ref }}
+        run: |
+          base_ref="${MODULE_RELEASE_BASE_REF:-origin/main}"
+          python3 scripts/module_release.py local-tags --base-ref "${base_ref}"
+          git config --global protocol.file.allow always
+          git config --global url."file://${GITHUB_WORKSPACE}/".insteadOf "https://github.com/soyaos/soyaos"
+          echo 'GIT_ALLOW_PROTOCOL=file:https:http:ssh:git' >> "${GITHUB_ENV}"
+          echo 'GONOPROXY=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GONOSUMDB=github.com/soyaos/soyaos/*' >> "${GITHUB_ENV}"
+          echo 'GOPROXY=https://proxy.golang.org,direct' >> "${GITHUB_ENV}"
+          echo 'GOTOOLCHAIN=local' >> "${GITHUB_ENV}"
+
+      - name: Verify workspace topology
+        run: |
+          test ! -e go.mod
+          test "$(go list -m | wc -l | tr -d ' ')" = "26"
+          test "$(find cmd pkg -mindepth 2 -maxdepth 2 -name go.mod | wc -l | tr -d ' ')" = "26"
+
+      - name: Test module release planner
+        run: python3 -m unittest scripts/test_module_release.py
 
       - name: Verify module tidiness
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum || { \
-            echo "go.mod / go.sum out of date — run 'go mod tidy'"; exit 1; }
+        run: make tidy-check
 
       - name: gofmt
-        run: |
-          fmt_out=$(gofmt -l -s .)
-          if [ -n "$fmt_out" ]; then
-            echo "gofmt issues in:"
-            echo "$fmt_out"
-            exit 1
-          fi
+        run: make fmt-check
 
       - name: go vet
-        run: go vet ./...
+        run: make vet
 
-      - name: go test
-        run: go test -race -count=1 ./...
+      - name: go test workspace
+        run: make test
+
+      - name: go test independent modules
+        run: make test-independent
 
       - name: go build
-        run: go build -trimpath -o bin/soyaos ./cmd/soyaos
+        run: make build
+
+      - name: docker build
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          MODULE_RELEASE_PR: ${{ inputs.module_release_pr }}
+        run: |
+          independent_module_download=true
+          if [ "${MODULE_RELEASE_PR}" = "true" ]; then
+            independent_module_download=false
+          fi
+          docker build \
+            --build-arg VERSION=ci \
+            --build-arg GITSHA="${GITHUB_SHA::12}" \
+            --build-arg INDEPENDENT_MODULE_DOWNLOAD="${independent_module_download}" \
+            -t soyaos:ci .

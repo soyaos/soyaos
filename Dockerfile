@@ -13,6 +13,9 @@
 # Build args:
 #   VERSION  semantic version string baked into the binary (default: dev)
 #   GITSHA   git commit SHA baked into the binary (default: unknown)
+#   INDEPENDENT_MODULE_DOWNLOAD  resolve every module with GOWORK=off before
+#                                building (default: true; false only while CI
+#                                simulates not-yet-published module tags)
 #
 # Example:
 #   docker build \
@@ -29,12 +32,26 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
-# Cache module downloads in their own layer.
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Bring in the rest of the source tree.
+# Bring in the workspace and all module manifests. Each module is independently
+# resolvable; the workspace only selects the local source during the build.
 COPY . .
+ARG INDEPENDENT_MODULE_DOWNLOAD=true
+RUN set -eux; \
+    if [ "${INDEPENDENT_MODULE_DOWNLOAD}" = "true" ]; then \
+      for module_file in cmd/*/go.mod pkg/*/go.mod; do \
+        module_dir="$(dirname "${module_file}")"; \
+        (cd "${module_dir}" && GOWORK=off go mod download); \
+      done; \
+    else \
+      echo "pending module tags: replacing versioned internal requirements with workspace source"; \
+      sed -n -E \
+        's#^[[:space:]]*(github\.com/soyaos/soyaos/(cmd|pkg)/[^[:space:]]+)[[:space:]]+(v[^[:space:]]+).*#\1 \3#p' \
+        cmd/*/go.mod pkg/*/go.mod | sort -u | \
+      while read -r module_path module_version; do \
+        module_dir="${module_path#github.com/soyaos/soyaos/}"; \
+        go work edit -replace="${module_path}@${module_version}=./${module_dir}"; \
+      done; \
+    fi
 
 ARG VERSION=dev
 ARG GITSHA=unknown

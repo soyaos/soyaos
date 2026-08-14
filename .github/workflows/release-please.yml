@@ -10,11 +10,13 @@ on:
     branches: [main]
 
 permissions:
+  actions: write
   contents: write
   issues: write
   pull-requests: write
   packages: write
   id-token: write
+  statuses: write
 
 jobs:
   release-please:
@@ -31,6 +33,23 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+
+      - name: Dispatch protected checks for release PRs
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          set -euo pipefail
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/contents/scripts/dispatch_protected_checks.sh?ref=${GITHUB_SHA}" \
+            --jq .content \
+            | base64 --decode \
+            > /tmp/dispatch_protected_checks.sh
+          chmod +x /tmp/dispatch_protected_checks.sh
+          while IFS= read -r branch; do
+            /tmp/dispatch_protected_checks.sh "${branch}" false
+          done < <(jq -r '.[].headBranchName' <<< "${RELEASE_PRS}")
 
   publish:
     name: publish release assets and image
