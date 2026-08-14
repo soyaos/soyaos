@@ -3,7 +3,7 @@ module github.com/soyaos/soyaos/pkg/factory
 go 1.23.0
 
 require (
-	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.2
+	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.3
 	gopkg.in/yaml.v3 v3.0.1
 )
 
