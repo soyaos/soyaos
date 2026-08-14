@@ -14,6 +14,7 @@
 //	soyaos agent build [<path>]   build a canonical SoyaPack v0 .spk archive
 //	soyaos agent deploy <pack>    register a built .spk with a running soyaos
 //	soyaos pack validate <path>   parse + validate a SoyaPack v0 manifest
+//	soyaos channel bind nas ...  perform one write-only NAS compatibility probe
 //
 // Each subcommand has its own flag set parsed with stdlib `flag`.
 package main
@@ -73,6 +74,10 @@ func main() {
 		exit(cmdAgent(os.Args[2:]))
 	case "pack":
 		exit(cmdPack(os.Args[2:]))
+	case "channel":
+		exit(cmdChannel(os.Args[2:]))
+	case "nas":
+		exit(cmdNAS(os.Args[2:]))
 	case "relay":
 		exit(cmdRelay(os.Args[2:]))
 	case "help", "-h", "--help":
@@ -102,6 +107,8 @@ Usage:
   soyaos pack validate <path>     parse + validate a SoyaPack v0 manifest
                                   (<path> is a directory containing soyapack.yaml
                                   or a path to a .yaml file)
+  soyaos channel bind nas [flags] write a random probe through one NAS binding
+  soyaos nas check [flags]        alias for "channel bind nas"
   soyaos relay serve              run a ciphertext-only UDP/QUIC relay
   soyaos relay token              mint a short-lived Moon/Comet route token
   soyaos help                     show this message

@@ -13,28 +13,30 @@
 // Password field before returning so a heap dump never contains the
 // secret beyond the task lifetime.
 //
-// alpha shape:
-//   - smb, nfs, s3 are deliberate stubs that return ErrNotImplemented; the
-//     real clients (go-smb2, go-nfs-client, AWS SDK) land in Stage 5 when
-//     SilentCut is wired end-to-end.
-//   - webdav is live: net/http PUT with Basic Auth is enough to exercise
-//     the contract and to give SilentCut a working end-to-end path for
-//     Nextcloud users today.
+// The four drivers are real wire implementations. SMB speaks SMB2/3, NFS
+// speaks NFSv3 over ONC RPC, WebDAV uses authenticated HTTP PUT, and S3 uses
+// SigV4 against AWS or an S3-compatible endpoint.
 package nas
 
 import (
 	"context"
 	"errors"
 	"io"
+	"path"
+	"strings"
+	"time"
 )
 
 // ErrUnknownProtocol is returned by Open when cfg.Protocol is empty or
 // outside the four supported values.
 var ErrUnknownProtocol = errors.New("nas: unknown protocol")
 
-// ErrNotImplemented is returned by the alpha stubs (smb / nfs / s3). Callers
-// use errors.Is to distinguish "tier not yet built" from network errors.
-var ErrNotImplemented = errors.New("nas: protocol not implemented in alpha")
+// ErrInvalidConfig is returned before dialing when a binding is incomplete or
+// unsafe. It never includes credential values.
+var ErrInvalidConfig = errors.New("nas: invalid configuration")
+
+// ErrClosed is returned when Write races with, or follows, Close.
+var ErrClosed = errors.New("nas: handle closed")
 
 // NAS is the unified write-only handle every protocol must satisfy. Read is
 // out of scope — SilentCut only needs to push artifacts outward.
@@ -70,18 +72,35 @@ type Config struct {
 	// by Close() in implementations that store them.
 	Username string
 	Password string
+	Domain   string
 
 	// Bucket and Region are S3-specific.
 	Bucket string
 	Region string
+	// SessionToken carries an optional short-lived S3 credential token.
+	SessionToken string
 
 	// Endpoint is the override for S3-compatible services (MinIO / R2).
 	Endpoint string
+
+	// NFSUseProcessIDs makes AUTH_SYS use the current process uid/gid. When
+	// false the explicit NFSUID/NFSGID values are used (including uid 0).
+	NFSUseProcessIDs bool
+	NFSUID           uint32
+	NFSGID           uint32
+	NFSMachine       string
+
+	// Timeout bounds connection establishment where the protocol library
+	// exposes a context-aware dialer. Zero selects a conservative default.
+	Timeout time.Duration
 }
 
 // Open returns a NAS handle for cfg. The returned handle is usable until
 // Close is called.
 func Open(ctx context.Context, cfg Config) (NAS, error) {
+	if ctx == nil {
+		return nil, errors.Join(ErrInvalidConfig, errors.New("context is required"))
+	}
 	switch cfg.Protocol {
 	case "smb":
 		return openSMB(ctx, cfg)
@@ -94,4 +113,27 @@ func Open(ctx context.Context, cfg Config) (NAS, error) {
 	default:
 		return nil, ErrUnknownProtocol
 	}
+}
+
+const defaultTimeout = 15 * time.Second
+
+func timeoutFor(cfg Config) time.Duration {
+	if cfg.Timeout > 0 {
+		return cfg.Timeout
+	}
+	return defaultTimeout
+}
+
+// cleanRemotePath normalizes the write-only relative path shared by SMB, NFS,
+// and S3. A leading slash is accepted for compatibility with the original
+// connector contract, but traversal, backslashes and an empty path are not.
+func cleanRemotePath(raw string) (string, error) {
+	if strings.Contains(raw, "\\") {
+		return "", errors.Join(ErrInvalidConfig, errors.New("remote path must use forward slashes"))
+	}
+	cleaned := path.Clean(strings.TrimLeft(raw, "/"))
+	if cleaned == "." || cleaned == "" || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.Join(ErrInvalidConfig, errors.New("remote path must be a non-empty relative path"))
+	}
+	return cleaned, nil
 }

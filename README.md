@@ -131,6 +131,34 @@ curl http://127.0.0.1:7474/v1/models \
 
 See [`examples/echo-agent/`](examples/echo-agent/) for the first runnable agent.
 
+### Check NAS write compatibility
+
+The alpha CLI can write a random probe through four real NAS protocols: SMB
+2/3, NFSv3, WebDAV, and S3-compatible object storage. Credentials are accepted
+only through named environment variables; they are never accepted as raw CLI
+arguments or included in the JSON result.
+
+```bash
+export NAS_USER='temporary-test-user'
+export NAS_PASSWORD='temporary-test-password'
+
+# SMB 2/3. For NFS use: --protocol nfs --host 192.0.2.10 --share /volume1/test
+./bin/soyaos channel bind nas \
+  --protocol smb \
+  --host 192.0.2.10 \
+  --share soyaos-test \
+  --username-env NAS_USER \
+  --password-env NAS_PASSWORD
+```
+
+Success produces one machine-readable JSON line containing the protocol,
+generated remote path, byte count, and elapsed time. The command writes only a
+new probe file below `soyaos-check/`; run it against an isolated test share,
+never production data. NFS currently uses NFSv3 `AUTH_SYS` with the CLI
+process's UID/GID. WebDAV `--host` and S3 `--host` must be explicit `http://` or
+`https://` URLs; for S3, `--share` is the bucket name. Run
+`./bin/soyaos channel bind nas -h` for all flags.
+
 ### Use from any OpenAI-Compatible client
 
 SoyaOS speaks the OpenAI `/v1/chat/completions` API verbatim. Paste the same three values — `base_url`, `api_key`, `model` — into any client and your Agent shows up as a virtual model.

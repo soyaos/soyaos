@@ -74,6 +74,18 @@ func TestKernelHookAdapter_UnresolvedHostRef(t *testing.T) {
 	}
 }
 
+func TestKernelHookAdapter_UnresolvedSecretRef(t *testing.T) {
+	_, err := KernelHookAdapter(context.Background(), BindingDecl{
+		Protocol: "webdav",
+		HostRef:  "https://nas.invalid",
+		Share:    "/v",
+		Secrets:  map[string]string{"password_ref": "${MISSING_PASSWORD}"},
+	}, fakeEnv(nil))
+	if err == nil || !strings.Contains(err.Error(), "password_ref") {
+		t.Fatalf("err=%v, want unresolved password_ref", err)
+	}
+}
+
 func TestKernelHookAdapter_UnknownProtocol(t *testing.T) {
 	env := fakeEnv(nil)
 	_, err := KernelHookAdapter(context.Background(), BindingDecl{

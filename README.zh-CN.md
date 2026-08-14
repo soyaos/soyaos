@@ -92,6 +92,31 @@ curl http://127.0.0.1:7474/v1/models \
 
 参见 [`examples/echo-agent/`](examples/echo-agent/) 获取第一个可运行的 Agent。
 
+### 检查 NAS 写入兼容性
+
+Alpha CLI 已能通过四种真实 NAS 协议写入随机探针：SMB 2/3、NFSv3、
+WebDAV 和 S3 兼容对象存储。凭据只能通过“环境变量名”传给命令；CLI
+不接受明文凭据参数，输出的 JSON 也不会包含凭据。
+
+```bash
+export NAS_USER='临时测试账号'
+export NAS_PASSWORD='临时测试密码'
+
+# SMB 2/3。NFS 示例：--protocol nfs --host 192.0.2.10 --share /volume1/test
+./bin/soyaos channel bind nas \
+  --protocol smb \
+  --host 192.0.2.10 \
+  --share soyaos-test \
+  --username-env NAS_USER \
+  --password-env NAS_PASSWORD
+```
+
+成功时只输出一行机器可读 JSON，包含协议、生成的远端路径、字节数和耗时。
+命令只会在 `soyaos-check/` 下新建探针文件；请务必使用隔离的测试共享目录，
+不要对生产数据运行。NFS 当前使用 NFSv3 `AUTH_SYS`，UID/GID 与 CLI 进程
+一致；WebDAV 和 S3 的 `--host` 必须是明确的 `http://` 或 `https://` URL，
+S3 的 `--share` 表示 bucket。用 `./bin/soyaos channel bind nas -h` 查看全部参数。
+
 ### 从任意 OpenAI 兼容客户端接入
 
 SoyaOS 完整复用 OpenAI 的 `/v1/chat/completions` 协议。只要把同样的三个值 —— `base_url`、`api_key`、`model` —— 粘进任意客户端，你的 Agent 就会作为一个虚拟模型出现在模型列表里。

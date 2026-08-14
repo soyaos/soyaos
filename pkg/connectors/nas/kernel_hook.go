@@ -65,15 +65,13 @@ var ErrUnresolvedHostRef = errors.New("nas: storage_nas.host_ref env var not set
 // KernelHookAdapter resolves one manifest.storage_nas[] entry into a
 // live NAS handle. Returns HookResult on success.
 //
-//   - protocol must be one of "smb", "nfs", "webdav", "s3". In alpha
-//     only webdav is non-stub (the other three return
-//     ErrNotImplemented via Open).
+//   - protocol must be one of "smb", "nfs", "webdav", "s3"; all four open
+//     real wire clients.
 //   - host_ref may be a literal URL or "${ENV_NAME}". The EnvResolver
 //     fills in the latter.
 //   - username / password are pulled from Secrets["username_ref"] /
-//     Secrets["password_ref"] (each a ${ENV_NAME} ref). Absent ⇒
-//     unauthenticated (alpha allows it for local mock servers and
-//     read-only Nextcloud).
+//     Secrets["password_ref"] (each a ${ENV_NAME} ref). SMB may additionally
+//     use domain_ref; S3 may use region_ref and session_token_ref.
 //
 // Closing the returned Handle is the caller's responsibility — the
 // kernel owns the handle once stored in nasTargets and closes it on
@@ -86,15 +84,39 @@ func KernelHookAdapter(ctx context.Context, decl BindingDecl, env EnvResolver) (
 	if err != nil {
 		return HookResult{}, fmt.Errorf("%w: %s", ErrUnresolvedHostRef, decl.HostRef)
 	}
-	username, _ := resolveSecret(decl.Secrets["username_ref"], env)
-	password, _ := resolveSecret(decl.Secrets["password_ref"], env)
+	username, err := resolveSecret(decl.Secrets["username_ref"], env)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("nas: resolve username_ref: %w", err)
+	}
+	password, err := resolveSecret(decl.Secrets["password_ref"], env)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("nas: resolve password_ref: %w", err)
+	}
+	domain, err := resolveSecret(decl.Secrets["domain_ref"], env)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("nas: resolve domain_ref: %w", err)
+	}
+	region, err := resolveSecret(decl.Secrets["region_ref"], env)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("nas: resolve region_ref: %w", err)
+	}
+	sessionToken, err := resolveSecret(decl.Secrets["session_token_ref"], env)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("nas: resolve session_token_ref: %w", err)
+	}
 
 	cfg := Config{
-		Protocol: decl.Protocol,
-		Host:     host,
-		Share:    decl.Share,
-		Username: username,
-		Password: password,
+		Protocol:         decl.Protocol,
+		Host:             host,
+		Share:            decl.Share,
+		Username:         username,
+		Password:         password,
+		Domain:           domain,
+		Bucket:           decl.Share,
+		Region:           region,
+		Endpoint:         host,
+		SessionToken:     sessionToken,
+		NFSUseProcessIDs: true,
 	}
 	handle, err := Open(ctx, cfg)
 	if err != nil {

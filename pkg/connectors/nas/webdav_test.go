@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWebDAV_WritePutsBytes(t *testing.T) {
@@ -106,10 +107,79 @@ func TestWebDAV_NonSuccessStatus(t *testing.T) {
 	}
 }
 
+func TestWebDAV_ExistingCollectionConfirmedAfterForbiddenMKCOL(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusForbidden)
+		case "PROPFIND":
+			w.WriteHeader(http.StatusMultiStatus)
+		case http.MethodPut:
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+	h, err := Open(context.Background(), Config{Protocol: "webdav", Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if _, err := h.Write(context.Background(), "existing/file.bin", strings.NewReader("probe")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	want := []string{"MKCOL", "PROPFIND", http.MethodPut}
+	if !bytes.Equal([]byte(strings.Join(methods, ",")), []byte(strings.Join(want, ","))) {
+		t.Fatalf("methods=%v, want %v", methods, want)
+	}
+}
+
 func TestWebDAV_HostRequired(t *testing.T) {
 	_, err := Open(context.Background(), Config{Protocol: "webdav"})
-	if err == nil {
-		t.Fatal("webdav: empty Host must error")
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("err=%v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestWebDAV_CloseWaitsForInFlightWrite(t *testing.T) {
+	reachedServer := make(chan struct{})
+	releaseServer := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "MKCOL" {
+			close(reachedServer)
+			<-releaseServer
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	h, err := Open(context.Background(), Config{Protocol: "webdav", Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := h.Write(context.Background(), "dir/probe.bin", strings.NewReader("probe"))
+		writeDone <- err
+	}()
+	<-reachedServer
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- h.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the in-flight write completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseServer)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
