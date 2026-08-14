@@ -7,10 +7,9 @@
 // alpha shape (APP-554):
 //
 //   - When the snapshot carries a *RemotionSpec, RenderStream spawns the
-//     declared Remotion CLI process via os/exec, pipes its stdout through
-//     the chunks channel as it arrives, and waits for the process to
-//     exit before closing the channel. Stderr is collected separately and
-//     surfaces via the returned error when the exit code is non-zero.
+//     declared Remotion CLI process via os/exec, waits for it to finish, then
+//     streams the actual output file through the chunks channel. Remotion's
+//     stdout/stderr progress logs are kept separate from the MP4 bytes.
 //
 //   - When the snapshot has no spec (the legacy contract used by the
 //     existing artifact + http_streaming tests), RenderStream falls back
@@ -27,7 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -212,9 +214,9 @@ func extractRemotionSpec(snapshot any) (*RemotionSpec, bool) {
 }
 
 // execCmdRunner is the production commandRunner. Each call spawns one
-// subprocess via os/exec.CommandContext and pipes its stdout to chunks
-// as the bytes arrive. Stderr is collected and folded into the
-// returned error on non-zero exit.
+// subprocess via os/exec.CommandContext. Canonical Remotion commands stream
+// their output file after a successful exit; legacy commands stream stdout.
+// Stderr is collected and folded into the returned error on non-zero exit.
 type execCmdRunner struct{}
 
 func (execCmdRunner) Run(ctx context.Context, argv []string, stdin []byte, chunks chan<- []byte, maxBytes int64) error {
@@ -225,12 +227,30 @@ func (execCmdRunner) Run(ctx context.Context, argv []string, stdin []byte, chunk
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	// `remotion render` writes the encoded MP4 to its output-path argument;
+	// stdout is a progress log, not video bytes. Earlier alpha code streamed
+	// that log and produced an invalid "MP4". Detect the canonical CLI shape,
+	// wait for the render, then stream the real file. The legacy stdout path is
+	// retained for other command runners and existing subprocess consumers.
+	if outputPath, ok := remotionFileOutputPath(argv); ok {
+		var stdoutBuf bytes.Buffer
+		cmd.Stdout = &stdoutBuf
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("remotion exited: %w (stdout: %s; stderr: %s)", err, stdoutBuf.String(), stderrBuf.String())
+		}
+		if err := streamFileChunks(ctx, outputPath, chunks, maxBytes); err != nil {
+			return fmt.Errorf("stream remotion output: %w", err)
+		}
+		return nil
+	}
+
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start remotion: %w", err)
@@ -269,6 +289,67 @@ func (execCmdRunner) Run(ctx context.Context, argv []string, stdin []byte, chunk
 		return fmt.Errorf("remotion exited: %w (stderr: %s)", err, stderrBuf.String())
 	}
 	return nil
+}
+
+// remotionFileOutputPath recognizes the stable Remotion CLI sequence:
+//
+//	<runner> [runner flags] remotion render <entry> <composition> <output>
+//
+// Only a direct Remotion binary or an npx/bunx launcher is accepted. Callers
+// still own capability gating; this helper only identifies where an already
+// authorized Remotion command will write its MP4.
+func remotionFileOutputPath(argv []string) (string, bool) {
+	if len(argv) < 5 {
+		return "", false
+	}
+	name := strings.TrimSuffix(filepath.Base(argv[0]), filepath.Ext(argv[0]))
+	if name == "remotion" {
+		if argv[1] == "render" && argv[4] != "" {
+			return argv[4], true
+		}
+		return "", false
+	}
+	if name != "npx" && name != "bunx" {
+		return "", false
+	}
+	for i := 1; i+4 < len(argv); i++ {
+		if argv[i] == "remotion" && argv[i+1] == "render" && argv[i+4] != "" {
+			return argv[i+4], true
+		}
+	}
+	return "", false
+}
+
+func streamFileChunks(ctx context.Context, path string, chunks chan<- []byte, maxBytes int64) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 64*1024)
+	var streamed int64
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			streamed += int64(n)
+			if maxBytes > 0 && streamed > maxBytes {
+				return fmt.Errorf("remotion output exceeded MaxStdoutBytes=%d", maxBytes)
+			}
+			out := append([]byte(nil), buf[:n]...)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chunks <- out:
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 // mp4Body returns the alpha-stub MP4 body. Header + placeholder.

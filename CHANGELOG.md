@@ -112,11 +112,17 @@ releases.
 ## [Unreleased]
 
 ### Added
+- `soyaos agent invoke --artifact mp4` production path with a pinned local
+  Remotion project, portable source export, machine-readable render/data-plane
+  evidence and direct SMB/NFS/WebDAV/S3 NAS delivery (APP-1703).
+- `data_plane.direct` SoyaPack manifest contract for Agents whose artifact
+  bytes must bypass Planet (APP-1703).
 - `pkg/soyapack` — canonical SoyaPack v0 manifest types, YAML loader
   (strict at the top level with `x-` extension passthrough) and `Validate()`
   that enforces the contract from [`soyaos/specs`](https://github.com/soyaos/specs).
   Three KIND fixtures live at `examples/manifests/{agent,skill,memory}.yaml`.
   Adds dependency `gopkg.in/yaml.v3`.
+
 - `pkg/control` — Solo control-plane JSON-over-HTTP RPC at `127.0.0.1:7475`,
   loopback-only. Exposes `GET /control/v0/healthz`,
   `GET /control/v0/agents`, `POST /control/v0/agents/{slug}/invoke`.
@@ -130,6 +136,11 @@ releases.
 - Studio placeholder at `GET /` of the data plane (real Studio later).
 - Recognition of `SOYA_MODEL_API_KEY` env var (BYOK key; stashed for the
   upcoming Stage 2 LLM providers — not yet used by Echo agent).
+
+### Fixed
+- MP4 rendering now streams Remotion's actual output file instead of CLI
+  progress logs written to stdout, and Solo startup wires the real NAS hook
+  before deployed Packs are registered (APP-1703).
 
 ### Changed
 - **Breaking** for anyone scripting against the alpha: default OpenAI-Compat

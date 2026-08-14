@@ -1,5 +1,10 @@
 # video-base (Comet image)
 
+> [!WARNING]
+> **SoyaOS is under active development and has not been formally released.**
+> This image is unstable, unsigned, and may introduce breaking changes at any
+> time. Use it only for isolated development and acceptance testing.
+
 > Placeholder location. The canonical home for SoyaOS Comet images will be
 > the dedicated `soyaos/comet-images` repository (created alongside the
 > APP-517 build pipeline). The Dockerfile and manifest here are kept in the
@@ -15,7 +20,7 @@ when it needs to render an MP4 artifact. It bundles:
 - Node 22 (bookworm-slim)
 - Chromium (headless rendering for Remotion)
 - ffmpeg (encode / mux)
-- Remotion CLI 4.x
+- Remotion CLI 4.0.509 (exactly pinned)
 - Noto CJK + Inter fonts (Chinese-and-English text in title cards)
 
 Cold-start target: **≤ 10s** (DD-011 §SLA). Total size target: **≤ 800 MB**.

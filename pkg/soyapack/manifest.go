@@ -69,6 +69,7 @@ type Manifest struct {
 	Actions    []ActionDecl     `yaml:"actions,omitempty" json:"actions,omitempty"`
 	State      *StateDecl       `yaml:"state,omitempty" json:"state,omitempty"`
 	StorageNAS []StorageNASDecl `yaml:"storage_nas,omitempty" json:"storage_nas,omitempty"`
+	DataPlane  *DataPlaneDecl   `yaml:"data_plane,omitempty" json:"data_plane,omitempty"`
 	Sandbox    *SandboxDecl     `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 	Uses       []string         `yaml:"uses,omitempty" json:"uses,omitempty"`
 
@@ -320,6 +321,16 @@ type StorageNASDecl struct {
 	Secrets  map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
+// DataPlaneDecl controls whether large Pack artifacts are allowed to fall
+// back through Planet. Direct=true is the DD-011 SilentCut posture: Planet
+// may coordinate and audit the run, but MP4 bytes must flow directly between
+// Comet and Moon/NAS. A host that cannot establish a direct path must fail the
+// artifact delivery instead of silently proxying it through the control
+// plane.
+type DataPlaneDecl struct {
+	Direct bool `yaml:"direct" json:"direct"`
+}
+
 // Resources caps the compute budget per Pack invocation.
 type Resources struct {
 	CPU      int `yaml:"cpu,omitempty" json:"cpu,omitempty"` // vCPU
@@ -383,6 +394,7 @@ var knownTopLevelFields = map[string]struct{}{
 	"actions":      {},
 	"state":        {},
 	"storage_nas":  {},
+	"data_plane":   {},
 	"sandbox":      {},
 	"uses":         {},
 	"capabilities": {},

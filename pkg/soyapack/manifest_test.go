@@ -105,6 +105,34 @@ x-custom-vendor: { foo: bar, n: 42 }
 	}
 }
 
+func TestLoadAndValidate_DataPlaneDirect(t *testing.T) {
+	body := `spec_version: soyapack.v0
+kind: Agent
+name: silent-cut
+version: 0.1.0-alpha.1
+description: Render a short video without sending MP4 bytes through Planet.
+authors: [{name: SoyaOS Contributors}]
+license: MIT
+runtime: { compat: ">=0.1.0 <0.2.0" }
+determinism: stateful
+affinity: comet
+entry: prompts/main.md
+expose: { openai_compat: both, virtual_model_id: soya:silent-cut }
+data_plane:
+  direct: true
+`
+	m, err := soyapack.LoadFromBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if m.DataPlane == nil || !m.DataPlane.Direct {
+		t.Fatalf("data_plane.direct was not decoded: %+v", m.DataPlane)
+	}
+	if err := soyapack.Validate(m); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
 func TestValidate_RejectsBadSpecVersion(t *testing.T) {
 	m := minimalAgentManifest()
 	m.SpecVersion = "soyapack.v1"

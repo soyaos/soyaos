@@ -15,9 +15,36 @@ import (
 	"time"
 
 	"github.com/soyaos/soyaos/pkg/connectors/nas"
+	"github.com/soyaos/soyaos/pkg/kernel"
 )
 
 var errNASCheckFailed = errors.New("NAS compatibility probe failed; see JSON result")
+
+// nasHookForEnv is the production bridge between a deployed Pack's
+// storage_nas declaration and the real connector implementations. Keeping
+// env resolution here means the kernel never reads credentials directly and
+// tests can supply a map-backed resolver.
+func nasHookForEnv(ctx context.Context, getenv nas.EnvResolver) kernel.NASHook {
+	return func(decl kernel.NASBindingSpec) (kernel.NASTarget, error) {
+		resolved, err := nas.KernelHookAdapter(ctx, nas.BindingDecl{
+			ID:       decl.ID,
+			Protocol: decl.Protocol,
+			HostRef:  decl.HostRef,
+			Share:    decl.Share,
+			Access:   decl.Access,
+			Secrets:  decl.Secrets,
+		}, getenv)
+		if err != nil {
+			return kernel.NASTarget{}, err
+		}
+		return kernel.NASTarget{
+			ID:       resolved.ID,
+			Protocol: resolved.Protocol,
+			BasePath: resolved.BasePath,
+			Handle:   resolved.Handle,
+		}, nil
+	}
+}
 
 type nasCheckResult struct {
 	Protocol   string `json:"protocol"`

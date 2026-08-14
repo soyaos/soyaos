@@ -299,6 +299,47 @@ func TestMP4Renderer_RenderStream_RealSubprocess(t *testing.T) {
 	}
 }
 
+func TestRemotionFileOutputPath(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want string
+		ok   bool
+	}{
+		{
+			name: "npx",
+			argv: []string{"npx", "remotion", "render", "/workdir/src/index.ts", "Clip", "/workdir/out/clip.mp4"},
+			want: "/workdir/out/clip.mp4",
+			ok:   true,
+		},
+		{
+			name: "npx flag",
+			argv: []string{"npx", "--no-install", "remotion", "render", "/src/index.ts", "Clip", "/out/clip.mp4", "--props=/out/props.json"},
+			want: "/out/clip.mp4",
+			ok:   true,
+		},
+		{
+			name: "direct binary",
+			argv: []string{"/project/node_modules/.bin/remotion", "render", "/src/index.ts", "Clip", "/out/clip.mp4"},
+			want: "/out/clip.mp4",
+			ok:   true,
+		},
+		{name: "ordinary stdout command", argv: []string{"/bin/sh", "-c", "printf hi"}},
+		{
+			name: "untrusted words inside another command",
+			argv: []string{"echo", "remotion", "render", "entry.ts", "Clip", "/etc/passwd"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := remotionFileOutputPath(tc.argv)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("remotionFileOutputPath(%v) = (%q, %t), want (%q, %t)", tc.argv, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestMP4Renderer_RenderStream_PlaceholderWhenNoSpec(t *testing.T) {
 	// Sanity: passing a non-spec snapshot still takes the placeholder
 	// path and produces ≥3 chunks of valid-looking MP4 bytes — this is

@@ -104,7 +104,7 @@ Usage:
   soyaos agent list [--rpc URL]   list Agents registered with a running soyaos
   soyaos agent run <slug> "<prompt>" [--listen URL]
                                   invoke an Agent and print its response
-  soyaos agent invoke <slug> "<prompt>" [--artifact xlsx --output FILE]
+  soyaos agent invoke <slug> "<prompt>" [--artifact xlsx|mp4 --output FILE]
                                   invoke and optionally render a real artifact
   soyaos agent build [<path>]     build a canonical SoyaPack v0 .spk archive
   soyaos agent deploy <pack> [--rpc URL]
@@ -205,6 +205,7 @@ func cmdStart(args []string) error {
 	defer func() { _ = tw.Stop(context.Background()) }()
 	k.SetScheduleHook(makeScheduleHook(tw, soyaStore))
 	k.SetChannelHook(channelHookForEnv())
+	k.SetNASHook(nasHookForEnv(context.Background(), os.LookupEnv))
 
 	// Re-load every Pack previously deployed under <data-dir>/packs/* so
 	// `soyaos start` is idempotent: a Pack that was deployed via POST
@@ -435,9 +436,21 @@ func cmdAgentInvoke(args []string) error {
 	fs := flag.NewFlagSet("agent invoke", flag.ContinueOnError)
 	listen := fs.String("listen", "http://"+openaicompat.DefaultListenAddr, "OpenAI-Compat gateway base URL")
 	apiKey := fs.String("key", "sk-soya-dev-local", "API key for authentication")
-	artifactKind := fs.String("artifact", "", "artifact kind to render (currently: xlsx)")
+	artifactKind := fs.String("artifact", "", "artifact kind to render (xlsx or mp4)")
 	output := fs.String("output", "", "artifact output file")
-	schema := fs.String("schema", "topics.v1", "artifact schema identifier")
+	schema := fs.String("schema", "", "artifact schema identifier (defaults by artifact kind)")
+	remotionProject := fs.String("remotion-project", "", "portable Remotion project root for mp4 rendering")
+	sourceOutput := fs.String("source-output", "", "export the portable Remotion source tree and props here")
+	evidenceOutput := fs.String("evidence-output", "", "write machine-readable render/data-plane evidence JSON")
+	renderTimeout := fs.Duration("render-timeout", 5*time.Minute, "maximum MP4 render and delivery time")
+	nasProtocol := fs.String("nas-protocol", "", "optional direct NAS delivery protocol: smb, nfs, webdav, or s3")
+	nasHost := fs.String("nas-host", "", "NAS host or WebDAV/S3 endpoint (never include credentials)")
+	nasShare := fs.String("nas-share", "", "SMB share, NFS export, WebDAV root, or S3 bucket")
+	nasPath := fs.String("nas-path", "", "relative target path for the rendered MP4")
+	nasUsernameEnv := fs.String("nas-username-env", "", "environment variable containing NAS username/access key")
+	nasPasswordEnv := fs.String("nas-password-env", "", "environment variable containing NAS password/secret key")
+	nasSessionTokenEnv := fs.String("nas-session-token-env", "", "optional environment variable containing an S3 session token")
+	nasRegion := fs.String("nas-region", "us-east-1", "S3 region")
 	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
 		return err
 	}
@@ -445,8 +458,8 @@ func cmdAgentInvoke(args []string) error {
 	if len(rest) < 2 {
 		return errors.New("agent invoke: expected <slug> \"<prompt>\"")
 	}
-	if *artifactKind != "" && *artifactKind != "xlsx" {
-		return fmt.Errorf("agent invoke: unsupported artifact %q (currently: xlsx)", *artifactKind)
+	if *artifactKind != "" && *artifactKind != "xlsx" && *artifactKind != "mp4" {
+		return fmt.Errorf("agent invoke: unsupported artifact %q (supported: xlsx, mp4)", *artifactKind)
 	}
 	if *artifactKind != "" && *output == "" {
 		return errors.New("agent invoke: --output is required when --artifact is set")
@@ -461,10 +474,39 @@ func cmdAgentInvoke(args []string) error {
 		fmt.Println(content)
 		return nil
 	}
-	if err := renderXLSXArtifact(content, *schema, *output); err != nil {
-		return err
+	switch *artifactKind {
+	case "xlsx":
+		resolvedSchema := *schema
+		if resolvedSchema == "" {
+			resolvedSchema = "topics.v1"
+		}
+		if err := renderXLSXArtifact(content, resolvedSchema, *output); err != nil {
+			return err
+		}
+		fmt.Printf("rendered %s · schema=%s\n", *output, resolvedSchema)
+	case "mp4":
+		evidence, err := renderMP4Artifact(content, mp4InvokeOptions{
+			Schema:             *schema,
+			Output:             *output,
+			RemotionProject:    *remotionProject,
+			SourceOutput:       *sourceOutput,
+			EvidenceOutput:     *evidenceOutput,
+			RenderTimeout:      *renderTimeout,
+			NASProtocol:        *nasProtocol,
+			NASHost:            *nasHost,
+			NASShare:           *nasShare,
+			NASPath:            *nasPath,
+			NASUsernameEnv:     *nasUsernameEnv,
+			NASPasswordEnv:     *nasPasswordEnv,
+			NASSessionTokenEnv: *nasSessionTokenEnv,
+			NASRegion:          *nasRegion,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("rendered %s · schema=%s · bytes=%d · sha256=%s · planet_data_plane_bytes=%d\n",
+			*output, evidence.Schema, evidence.Bytes, evidence.SHA256, evidence.PlanetDataPlaneBytes)
 	}
-	fmt.Printf("rendered %s · schema=%s\n", *output, *schema)
 	return nil
 }
 
