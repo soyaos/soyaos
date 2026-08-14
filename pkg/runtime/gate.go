@@ -30,6 +30,29 @@ type NetRule struct {
 	Proto string
 }
 
+// Access is the task-scoped declaration of side effects an execution is
+// about to perform. Caps answers "what may this Pack do?"; Access answers
+// "what will this invocation do?". Keeping the two separate lets the gate
+// authorize requests without trying to infer semantics from arbitrary argv.
+//
+// Exec is derived from argv[0] by Authorize. Network and filesystem access
+// must be declared explicitly by the caller. A zero Access means the command
+// claims no network or filesystem side effects.
+type Access struct {
+	NetworkOut []EgressAccess
+	FSRead     []string
+	FSWrite    []string
+}
+
+// EgressAccess describes one outbound connection an invocation intends to
+// open. It deliberately mirrors NetRule without wildcard semantics: an
+// access request must name one concrete host, port and protocol.
+type EgressAccess struct {
+	Host  string
+	Port  int
+	Proto string
+}
+
 // Gate enforces the fail-closed capability checks. Construct one per task
 // invocation via NewGate; every outbound action the sandbox attempts goes
 // through one of the four Check methods. A denial returns a *DeniedError
@@ -48,6 +71,31 @@ func NewGate(caps Caps) *Gate {
 		Exec:       append([]string(nil), caps.Exec...),
 	}}
 	return g
+}
+
+// Authorize checks every external side effect known for one invocation before
+// the process is created. Checks run in a stable order so the first denial is
+// deterministic: exec, network egress, filesystem reads, filesystem writes.
+func (g *Gate) Authorize(argv0 string, access Access) error {
+	if err := g.CheckExec(argv0); err != nil {
+		return err
+	}
+	for _, target := range access.NetworkOut {
+		if err := g.CheckEgress(target.Host, target.Port, target.Proto); err != nil {
+			return err
+		}
+	}
+	for _, path := range access.FSRead {
+		if err := g.CheckFSRead(path); err != nil {
+			return err
+		}
+	}
+	for _, path := range access.FSWrite {
+		if err := g.CheckFSWrite(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CheckEgress authorizes one outbound network attempt. host is the
