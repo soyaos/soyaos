@@ -4,7 +4,7 @@ go 1.23.0
 
 require (
 	github.com/soyaos/soyaos/pkg/scope v0.1.0-alpha.2
-	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.2
+	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.3
 )
 
 require (

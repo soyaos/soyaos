@@ -11,8 +11,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/soyaos/soyaos/pkg/scope v0.1.0-alpha.2 h1:Q7xfX7Os3Ne0XB/lUskAQQGs4ZI1MsrMPWpG6E8cI3o=
 github.com/soyaos/soyaos/pkg/scope v0.1.0-alpha.2/go.mod h1:/ghRf7i+CrNaUmUO4ZeB/2FzjHjP1t9y9QpfmEGnl2E=
-github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.2 h1:b42vMfpQayiCdBFy5EXtiCQT/LB0rq3R+++DbumWG4I=
-github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.2/go.mod h1:Ak/hOeRj0t4g9p3mNT8R/wsbDXS31bHTh99UpHyOcjg=
+github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.3 h1:yYfkpUyd0iczG3aCMlPcxI8sMEvlqiQMei73IeBpaGg=
+github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.3/go.mod h1:Ak/hOeRj0t4g9p3mNT8R/wsbDXS31bHTh99UpHyOcjg=
 github.com/soyaos/soyaos/pkg/store v0.1.0-alpha.2 h1:97ykynJQiMwZMy5HZNhvIDCE5CtHUtLH93oVRkIAO1A=
 github.com/soyaos/soyaos/pkg/store v0.1.0-alpha.2/go.mod h1:M4aJcbPzanLFy9PPgXcfXjwQk5LTN14UjOy0rJibw1w=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
