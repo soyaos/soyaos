@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/xuri/excelize/v2"
@@ -81,7 +82,7 @@ func (r XLSXRenderer) Kind() Kind { return KindXLSX }
 
 // Render assembles the workbook and writes the .xlsx bytes to dst.
 func (r XLSXRenderer) Render(_ context.Context, snapshot any, dst io.Writer) (Artifact, error) {
-	snap, err := coerceXLSXSnapshot(snapshot)
+	snap, err := NormalizeXLSXSnapshot(snapshot)
 	if err != nil {
 		return Artifact{}, fmt.Errorf("xlsx: %w", err)
 	}
@@ -276,8 +277,9 @@ func writeSheet(f *excelize.File, name string, sheet XLSXSheet, markerStyle int)
 	return nil
 }
 
-// coerceXLSXSnapshot normalises the snapshot argument to XLSXSnapshot.
-func coerceXLSXSnapshot(snapshot any) (XLSXSnapshot, error) {
+// NormalizeXLSXSnapshot normalises the snapshot argument using the same
+// conversion as Render, so callers can validate exactly what will be rendered.
+func NormalizeXLSXSnapshot(snapshot any) (XLSXSnapshot, error) {
 	switch s := snapshot.(type) {
 	case XLSXSnapshot:
 		return s, nil
@@ -291,6 +293,38 @@ func coerceXLSXSnapshot(snapshot any) (XLSXSnapshot, error) {
 	default:
 		return XLSXSnapshot{}, fmt.Errorf("unsupported snapshot type %T", snapshot)
 	}
+}
+
+// ValidatePrimaryRowCount requires exactly expected populated data rows in the
+// first sheet (headers and supplementary sheets do not count). Empty rows cannot
+// pad a short generation. This explicit opt-in is not a global workbook limit.
+func (s XLSXSnapshot) ValidatePrimaryRowCount(expected int) error {
+	if expected <= 0 {
+		return fmt.Errorf("xlsx: expected rows must be positive")
+	}
+	if len(s.Sheets) == 0 || len(s.Sheets[0].Columns) == 0 {
+		return fmt.Errorf("xlsx: primary sheet must have columns and data rows")
+	}
+	valid := 0
+	for _, row := range s.Sheets[0].Rows {
+		populated := false
+		for i, cell := range row {
+			if i >= len(s.Sheets[0].Columns) {
+				break
+			}
+			if cell != nil && strings.TrimSpace(fmt.Sprint(cell)) != "" {
+				populated = true
+				break
+			}
+		}
+		if populated {
+			valid++
+		}
+	}
+	if valid != expected || len(s.Sheets[0].Rows) != expected {
+		return fmt.Errorf("xlsx: expected %d primary data rows, got %d valid rows (%d total)", expected, valid, len(s.Sheets[0].Rows))
+	}
+	return nil
 }
 
 // decodeXLSXSnapshotMap parses the JSON-shaped map form into XLSXSnapshot

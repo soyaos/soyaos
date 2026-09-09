@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 )
 
 // ErrInvalidManifest is the sentinel returned when Validate fails. Callers
@@ -168,6 +169,12 @@ func Validate(m *Manifest) error {
 
 	// --- actions ------------------------------------------------------------
 	for i, a := range m.Actions {
+		if a.Timeout != "" {
+			duration, err := time.ParseDuration(a.Timeout)
+			if err != nil || duration <= 0 {
+				return wrap("actions[%d].timeout must be a positive duration", i)
+			}
+		}
 		if a.ID == "" || a.Handler == "" {
 			return wrap("actions[%d] requires id + handler", i)
 		}
@@ -277,6 +284,11 @@ func validateCapabilities(c *Capabilities) error {
 }
 
 func validateAgent(m *Manifest) error {
+	if m.Prompt != nil && m.Prompt.IndexedTable != nil {
+		if err := m.Prompt.IndexedTable.Validate(len(m.Prompt.Steps)); err != nil {
+			return wrap("Agent: %v", err)
+		}
+	}
 	// Prompt body shape: exactly one of `entry` or `prompt.steps[]`.
 	// Both forms are valid v0 surfaces:
 	//

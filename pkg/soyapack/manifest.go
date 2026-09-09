@@ -139,10 +139,89 @@ type Input struct {
 //     streams only the final step back to the caller. (APP-550 Compo
 //     Phase B)
 type Prompt struct {
-	Scaffold string        `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
-	Tools    []string      `yaml:"tools,omitempty" json:"tools,omitempty"`
-	Steps    []PromptStep  `yaml:"steps,omitempty" json:"steps,omitempty"`
-	Upstream *UpstreamDecl `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+	IndexedTable *IndexedTable `yaml:"indexed_table,omitempty" json:"indexed_table,omitempty"`
+	Scaffold     string        `yaml:"scaffold,omitempty" json:"scaffold,omitempty"`
+	Tools        []string      `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Steps        []PromptStep  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Upstream     *UpstreamDecl `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+}
+
+// IndexedTable opts a three-stage chain into validated, programmatic table assembly.
+type IndexedTable struct {
+	TargetRows     int                 `yaml:"target_rows" json:"target_rows"`
+	CandidateRows  int                 `yaml:"candidate_rows" json:"candidate_rows"`
+	Columns        []string            `yaml:"columns" json:"columns"`
+	SheetName      string              `yaml:"sheet_name" json:"sheet_name"`
+	MaxRepairs     int                 `yaml:"max_repairs" json:"max_repairs"`
+	TimeoutSeconds int                 `yaml:"timeout_seconds" json:"timeout_seconds"`
+	BatchSize      int                 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	MaxConcurrency int                 `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
+	ColumnRules    []IndexedColumnRule `yaml:"column_rules,omitempty" json:"column_rules,omitempty"`
+}
+
+// IndexedColumnRule is a deterministic opt-in constraint, not semantic review.
+// Column is zero-based; all configured constraints must match exactly.
+type IndexedColumnRule struct {
+	Column              int      `yaml:"column" json:"column"`
+	AllowedValues       []string `yaml:"allowed_values,omitempty" json:"allowed_values,omitempty"`
+	ForbiddenSubstrings []string `yaml:"forbidden_substrings,omitempty" json:"forbidden_substrings,omitempty"`
+	Prefix              string   `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	Suffix              string   `yaml:"suffix,omitempty" json:"suffix,omitempty"`
+}
+
+// Validate rejects unbounded or ambiguous indexed-table configurations.
+func (c *IndexedTable) Validate(steps int) error {
+	if steps != 3 {
+		return fmt.Errorf("indexed_table requires exactly 3 prompt steps")
+	}
+	if c.TargetRows < 1 || c.CandidateRows < c.TargetRows || c.CandidateRows > 10000 {
+		return fmt.Errorf("indexed_table requires 1 <= target_rows <= candidate_rows <= 10000")
+	}
+	if c.BatchSize != 0 || c.MaxConcurrency != 0 {
+		if c.BatchSize < 1 || c.BatchSize > c.CandidateRows || c.MaxConcurrency < 1 || c.MaxConcurrency > 8 {
+			return fmt.Errorf("indexed_table batch_size and max_concurrency must both be set: 1 <= batch_size <= candidate_rows, 1 <= max_concurrency <= 8")
+		}
+		if (c.CandidateRows+c.BatchSize-1)/c.BatchSize > 100 {
+			return fmt.Errorf("indexed_table permits at most 100 candidate batches")
+		}
+	}
+	if c.MaxRepairs < 0 || c.MaxRepairs > 3 || c.TimeoutSeconds < 1 || c.TimeoutSeconds > 3600 {
+		return fmt.Errorf("indexed_table requires max_repairs in 0..3 and timeout_seconds in 1..3600")
+	}
+	if len(c.Columns) == 0 || len(c.Columns) > 100 {
+		return fmt.Errorf("indexed_table requires 1..100 columns")
+	}
+	seen := map[string]bool{}
+	for _, col := range c.Columns {
+		if strings.TrimSpace(col) == "" || seen[col] {
+			return fmt.Errorf("indexed_table columns must be nonempty and unique")
+		}
+		seen[col] = true
+	}
+	if strings.TrimSpace(c.SheetName) == "" || len([]rune(c.SheetName)) > 31 || strings.ContainsAny(c.SheetName, "[]:*?/\\") || strings.HasPrefix(c.SheetName, "'") || strings.HasSuffix(c.SheetName, "'") {
+		return fmt.Errorf("indexed_table sheet_name is invalid")
+	}
+	ruleColumns := map[int]bool{}
+	for _, rule := range c.ColumnRules {
+		if rule.Column < 0 || rule.Column >= len(c.Columns) || ruleColumns[rule.Column] {
+			return fmt.Errorf("indexed_table column_rules require unique in-range column indices")
+		}
+		if len(rule.AllowedValues) == 0 && len(rule.ForbiddenSubstrings) == 0 && rule.Prefix == "" && rule.Suffix == "" {
+			return fmt.Errorf("indexed_table column_rules require at least one constraint")
+		}
+		for _, value := range rule.AllowedValues {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("indexed_table allowed_values must be nonempty")
+			}
+		}
+		for _, value := range rule.ForbiddenSubstrings {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("indexed_table forbidden_substrings must be nonempty")
+			}
+		}
+		ruleColumns[rule.Column] = true
+	}
+	return nil
 }
 
 // PromptStep is one stage in a `prompt.steps[]` chain. Prompt is a path

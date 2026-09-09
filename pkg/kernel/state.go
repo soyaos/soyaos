@@ -77,6 +77,9 @@ func completionStateOwner(agent Agent, id auth.Identity) (state.Scope, string) {
 }
 
 type workbookSnapshot struct {
+	Metadata struct {
+		OriginalRequest string `json:"original_request"`
+	} `json:"metadata"`
 	Sheets []struct {
 		Columns []struct {
 			Header string `json:"header"`
@@ -106,6 +109,13 @@ func persistWorkbookRows(ctx context.Context, s state.Store, agent Agent, id aut
 				if alias := canonicalRowField(header); alias != "" {
 					payload[alias] = value
 				}
+			}
+			// Program-assembled snapshot metadata preserves the complete brief,
+			// including constraints not repeated in each individual topic. Set it
+			// after columns so a same-named column cannot replace this context.
+			// Older snapshots without metadata retain their existing payload shape.
+			if snapshot.Metadata.OriginalRequest != "" {
+				payload["original_request"] = snapshot.Metadata.OriginalRequest
 			}
 			encoded, err := json.Marshal(payload)
 			if err != nil {

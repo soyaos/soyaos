@@ -155,6 +155,15 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 	if !found {
 		return ActionResult{}, fmt.Errorf("%w: %s/%s", ErrUnknownAction, slug, actionID)
 	}
+	if decl.Timeout != "" {
+		duration, err := time.ParseDuration(decl.Timeout)
+		if err != nil || duration <= 0 {
+			return ActionResult{}, fmt.Errorf("kernel: action %s/%s timeout must be a positive duration", slug, actionID)
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, duration)
+		defer cancel()
+	}
 
 	// Resolution order: per-Pack handler (registered by RegisterFromPack)
 	// wins, then the global ActionHandler (set via SetActionHandler), then
@@ -194,7 +203,11 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 		}
 		req.Payload = merged
 	}
-	return h(ctx, decl, req)
+	result, err := h(ctx, decl, req)
+	if ctx.Err() != nil {
+		return ActionResult{}, ctx.Err()
+	}
+	return result, err
 }
 
 // defaultActionHandler is the alpha placeholder: it stamps a TaskID,

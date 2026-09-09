@@ -9,7 +9,7 @@
 //   - m.Entry              — single system prompt (the v0 default).
 //   - m.Prompt.Steps[]     — N-stage prompt chain (APP-550 Compo Phase B).
 //     The kernel runs each stage with the previous stage's *full*
-//     response fed in as the user message of the next stage; only the
+//     response and original brief fed in as user-level data to the next stage; only the
 //     final stage's stream is forwarded to the caller. This is how Compo
 //     reaches its grade-school-ready output quality without sacrificing
 //     the OpenAI-Compat streaming surface.
@@ -114,6 +114,12 @@ func (k *Kernel) registerFromPack(m *soyapack.Manifest, packDir string, factory 
 	}
 
 	handler := buildPackHandler(prompts, provider, cfg.Model)
+	if m.Prompt != nil && m.Prompt.IndexedTable != nil {
+		if err := m.Prompt.IndexedTable.Validate(len(prompts)); err != nil {
+			return err
+		}
+		handler = buildIndexedTableHandler(prompts, provider, cfg.Model, *m.Prompt.IndexedTable)
+	}
 
 	k.Register(Agent{
 		Slug:        slug,
@@ -332,13 +338,12 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 			}, out)
 		}
 
-		// Multi-step chain. Stages 1..N-1 run non-streaming; their full
-		// response becomes the user message of the next stage. Stage N
-		// streams. We preserve the caller's original conversation as
-		// the user message of stage 1, then collapse to a single
-		// "the previous stage said: ..." user message thereafter so
-		// each stage sees only what the chain explicitly threads.
-		userPayload := combineUserMessages(req.Messages)
+		// Keep the original brief in every stage, alongside (not replaced
+		// by) the previous result. Both remain user-level data; only the
+		// pack owns the system prompt. JSON escaping prevents generated
+		// delimiters from obscuring the boundary between the two fields.
+		originalRequest := combineUserMessages(req.Messages)
+		userPayload := originalRequest
 
 		// Chain stages need a max_tokens *floor*, not just a default. The
 		// caller's max_tokens controls the *final* user-visible output
@@ -391,7 +396,11 @@ func buildPackHandler(prompts []promptBody, provider llmcall.Provider, resolvedM
 			if err != nil {
 				return fmt.Errorf("kernel: prompt step %q (#%d): %w", stage.id, i, err)
 			}
-			userPayload = content
+			envelope, _ := json.Marshal(struct {
+				OriginalRequest     string `json:"original_request"`
+				PreviousStageOutput string `json:"previous_stage_output"`
+			}{originalRequest, content}) // string-only payload cannot fail to marshal
+			userPayload = string(envelope)
 		}
 
 		// Final stage. We could pipe upstream chunks straight to `out`
@@ -545,8 +554,8 @@ func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolv
 // stages and the per-row action handler — anywhere we want the full
 // response as a single string while still getting headers back from
 // the upstream in seconds rather than waiting for the whole body to
-// land. Mirrors the SSE consumer pattern so a Done chunk terminates
-// cleanly without contributing to the buffer.
+// land. Terminal chunks may include a final delta. Truncated or filtered
+// completions are rejected instead of being passed to the next stage.
 //
 // Retries io.ErrUnexpectedEOF up to streamCollectMaxRetries times. Long
 // SSE streams to DashScope reasoning models (qwen3.6-plus thinks for
@@ -584,14 +593,19 @@ func streamCollectOnce(ctx context.Context, provider llmcall.Provider, req llmca
 		close(out)
 	}()
 	var sb strings.Builder
+	var completionErr error
 	for c := range out {
-		if c.Done {
-			continue
+		switch c.FinishReason {
+		case "length", "content_filter":
+			completionErr = fmt.Errorf("incomplete model response: finish_reason=%s", c.FinishReason)
 		}
 		sb.WriteString(c.Delta)
 	}
 	if err := <-errCh; err != nil {
 		return "", err
+	}
+	if completionErr != nil {
+		return "", completionErr
 	}
 	return sb.String(), nil
 }
