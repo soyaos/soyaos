@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/soyaos/soyaos/pkg/auth"
+	"github.com/soyaos/soyaos/pkg/llmcall"
 )
 
 func TestIndexedBatchPartitionsRejectCrossPartitionRows(t *testing.T) {
@@ -24,6 +28,50 @@ func TestIndexedBatchPartitionsRejectCrossPartitionRows(t *testing.T) {
 	})
 	if err != nil || len(rows) != 2 || rows[0][1] != "A" || rows[1][1] != "B" {
 		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
+func TestIndexedPartitionSelectionRejectsSkewAndRepairs(t *testing.T) {
+	for _, repairSucceeds := range []bool{false, true} {
+		t.Run(fmt.Sprint(repairSucceeds), func(t *testing.T) {
+			cfg := indexedConfig()
+			cfg.CandidateRows, cfg.BatchSize, cfg.MaxConcurrency = 4, 2, 2
+			cfg.BatchColumn, cfg.BatchValues, cfg.MinPerPartition = 1, []string{"A", "B"}, 1
+			selections := 0
+			provider := &indexedFunctionProvider{stream: func(_ context.Context, req llmcall.Request, out chan<- llmcall.Chunk) error {
+				var p map[string]any
+				if err := json.Unmarshal([]byte(req.Messages[1].Content), &p); err != nil {
+					return err
+				}
+				body := "map"
+				if strings.HasPrefix(req.Messages[0].Content, "candidate") {
+					v := p["partition_value"].(string)
+					b, _ := json.Marshal(map[string]any{"rows": [][]string{{v + "1", v}, {v + "2", v}}})
+					body = string(b)
+				} else if req.Messages[0].Content == "select" {
+					selections++
+					body = `{"indices":[1,3]}`
+					if selections == 2 {
+						if p["repair"] != true || !strings.Contains(fmt.Sprint(p["validation_error"]), "per partition") {
+							return fmt.Errorf("missing coverage repair context")
+						}
+						if repairSucceeds {
+							body = `{"indices":[1,2]}`
+						}
+					}
+				}
+				out <- llmcall.Chunk{Delta: body}
+				return nil
+			}}
+			out := make(chan llmcall.Chunk, 2)
+			err := buildIndexedTableHandler(indexedPrompts(), provider, "model", cfg)(context.Background(), auth.Identity{}, llmcall.Request{}, out)
+			if selections != 2 || (err == nil) != repairSucceeds {
+				t.Fatalf("selections=%d err=%v", selections, err)
+			}
+			if !repairSucceeds && len(out) != 0 {
+				t.Fatal("invalid partition coverage emitted output")
+			}
+		})
 	}
 }
 
