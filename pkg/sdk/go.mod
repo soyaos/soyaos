@@ -4,7 +4,7 @@ go 1.23.0
 
 require (
 	github.com/soyaos/soyaos/pkg/auth v0.1.0-alpha.2
-	github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.4
+	github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.5
 	github.com/soyaos/soyaos/pkg/llmcall v0.1.0-alpha.4
 )
 
