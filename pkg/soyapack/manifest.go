@@ -157,6 +157,8 @@ type IndexedTable struct {
 	BatchSize      int                 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
 	MaxConcurrency int                 `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
 	ColumnRules    []IndexedColumnRule `yaml:"column_rules,omitempty" json:"column_rules,omitempty"`
+	BatchColumn    int                 `yaml:"batch_column,omitempty" json:"batch_column,omitempty"`
+	BatchValues    []string            `yaml:"batch_values,omitempty" json:"batch_values,omitempty"`
 }
 
 // IndexedColumnRule is a deterministic opt-in constraint, not semantic review.
@@ -187,6 +189,18 @@ func (c *IndexedTable) Validate(steps int) error {
 	}
 	if c.MaxRepairs < 0 || c.MaxRepairs > 3 || c.TimeoutSeconds < 1 || c.TimeoutSeconds > 3600 {
 		return fmt.Errorf("indexed_table requires max_repairs in 0..3 and timeout_seconds in 1..3600")
+	}
+	if len(c.BatchValues) > 0 {
+		if c.BatchSize < 1 || c.BatchColumn < 0 || c.BatchColumn >= len(c.Columns) || len(c.BatchValues) != (c.CandidateRows+c.BatchSize-1)/c.BatchSize {
+			return fmt.Errorf("indexed_table batch_values require one value per batch and an in-range batch_column")
+		}
+		seenValues := map[string]bool{}
+		for _, value := range c.BatchValues {
+			if strings.TrimSpace(value) == "" || seenValues[value] {
+				return fmt.Errorf("indexed_table batch_values must be nonempty and unique")
+			}
+			seenValues[value] = true
+		}
 	}
 	if len(c.Columns) == 0 || len(c.Columns) > 100 {
 		return fmt.Errorf("indexed_table requires 1..100 columns")
@@ -285,11 +299,33 @@ type ChannelDecl struct {
 
 // ActionDecl describes a row / button / api action trigger (DD-010).
 type ActionDecl struct {
-	ID        string   `yaml:"id" json:"id"`
-	On        string   `yaml:"on" json:"on"` // per_row / button / api
-	Handler   string   `yaml:"handler" json:"handler"`
-	Timeout   string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Artifacts []string `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	ID             string          `yaml:"id" json:"id"`
+	On             string          `yaml:"on" json:"on"` // per_row / button / api
+	Handler        string          `yaml:"handler" json:"handler"`
+	Timeout        string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Artifacts      []string        `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	TextValidation *TextValidation `yaml:"text_validation,omitempty" json:"text_validation,omitempty"`
+}
+
+// TextValidation is an opt-in, deterministic text contract, not factual review.
+type TextValidation struct {
+	Section          string   `yaml:"section,omitempty" json:"section,omitempty"`
+	MinChars         int      `yaml:"min_chars,omitempty" json:"min_chars,omitempty"`
+	MaxChars         int      `yaml:"max_chars" json:"max_chars"`
+	MaxRepairs       int      `yaml:"max_repairs,omitempty" json:"max_repairs,omitempty"`
+	ForbiddenPhrases []string `yaml:"forbidden_phrases,omitempty" json:"forbidden_phrases,omitempty"`
+}
+
+func (v *TextValidation) Validate() error {
+	if v.MinChars < 0 || v.MaxChars < 1 || v.MaxChars < v.MinChars || v.MaxChars > 100000 || v.MaxRepairs < 0 || v.MaxRepairs > 2 {
+		return fmt.Errorf("text_validation requires 0 <= min_chars <= max_chars <= 100000, max_chars > 0, and max_repairs in 0..2")
+	}
+	for _, phrase := range v.ForbiddenPhrases {
+		if strings.TrimSpace(phrase) == "" {
+			return fmt.Errorf("text_validation forbidden_phrases must be nonempty")
+		}
+	}
+	return nil
 }
 
 // StateDecl declares Stateful Agent storage (DD-010).

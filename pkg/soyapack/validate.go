@@ -169,6 +169,11 @@ func Validate(m *Manifest) error {
 
 	// --- actions ------------------------------------------------------------
 	for i, a := range m.Actions {
+		if a.TextValidation != nil {
+			if err := a.TextValidation.Validate(); err != nil {
+				return wrap("actions[%d]: %v", i, err)
+			}
+		}
 		if a.Timeout != "" {
 			duration, err := time.ParseDuration(a.Timeout)
 			if err != nil || duration <= 0 {

@@ -36,7 +36,11 @@ func buildIndexedTableHandler(prompts []promptBody, provider llmcall.Provider, m
 			if err != nil {
 				return "", err
 			}
-			content, err := streamCollect(callCtx, provider, llmcall.Request{Model: model, Messages: []llmcall.Message{{Role: "system", Content: prompts[step].body}, {Role: "user", Content: string(data)}}, Temperature: req.Temperature, MaxTokens: maxTokens, Stream: true, ResponseFormat: req.ResponseFormat})
+			systemPrompt := prompts[step].body
+			if partition, ok := payload["partition_value"].(string); ok {
+				systemPrompt += fmt.Sprintf("\n本次仅生成分区 %q。每一行的第%d列（%s）必须精确等于 %q，不得输出其他分区；只展开主题地图中该分区的问题。", partition, cfg.BatchColumn+1, cfg.Columns[cfg.BatchColumn], partition)
+			}
+			content, err := streamCollect(callCtx, provider, llmcall.Request{Model: model, Messages: []llmcall.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: string(data)}}, Temperature: req.Temperature, MaxTokens: maxTokens, Stream: true, ResponseFormat: req.ResponseFormat})
 			slog.Info("indexed_table stage", "stage", []string{"collect", "expand", "selection"}[step], "batch_index", payload["batch_index"], "batch_count", payload["batch_count"], "target_count", payload["target_count"], "repair", payload["repair"], "elapsed_ms", time.Since(started).Milliseconds(), "success", err == nil && callCtx.Err() == nil)
 			if err != nil {
 				return "", fmt.Errorf("indexed_table step %q: %w", prompts[step].id, err)
@@ -170,6 +174,11 @@ func expandIndexedBatches(parent context.Context, cfg soyapack.IndexedTable, cou
 				payload["batch_index"] = index + 1
 				payload["batch_count"] = batches
 				payload["target_count"] = target
+				partition := ""
+				if len(cfg.BatchValues) > 0 && base["repair"] != true {
+					partition = cfg.BatchValues[index]
+					payload["partition_value"] = partition
+				}
 				content, err := call(ctx, 1, payload)
 				if err != nil {
 					fail(err)
@@ -183,8 +192,8 @@ func expandIndexedBatches(parent context.Context, cfg soyapack.IndexedTable, cou
 					return
 				}
 				if len(candidates.Rows) > target {
-					fail(fmt.Errorf("indexed_table candidates batch %d exceeds requested count %d", index+1, target))
-					return
+					slog.Info("indexed_table candidate surplus", "batch_index", index+1, "discarded_count", len(candidates.Rows)-target)
+					candidates.Rows = candidates.Rows[:target]
 				}
 				validRows := make([][]string, 0, len(candidates.Rows))
 				for i, row := range candidates.Rows {
@@ -198,7 +207,7 @@ func expandIndexedBatches(parent context.Context, cfg soyapack.IndexedTable, cou
 							return
 						}
 					}
-					if matchesIndexedColumnRules(row, cfg.ColumnRules) {
+					if matchesIndexedColumnRules(row, cfg.ColumnRules) && (partition == "" || row[cfg.BatchColumn] == partition) {
 						validRows = append(validRows, row)
 					}
 				}

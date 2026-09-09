@@ -522,7 +522,7 @@ func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolv
 		if err != nil {
 			return ActionResult{}, fmt.Errorf("kernel: encode action payload: %w", err)
 		}
-		content, err := streamCollect(ctx, provider, llmcall.Request{
+		content, err := collectValidatedAction(ctx, provider, decl, userPayload, llmcall.Request{
 			Model: resolvedModel,
 			Messages: []llmcall.Message{
 				{Role: "system", Content: promptBody},

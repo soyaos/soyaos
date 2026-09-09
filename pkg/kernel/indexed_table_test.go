@@ -313,7 +313,6 @@ func TestIndexedTableRejectsInvalidOutputWithoutEmission(t *testing.T) {
 		{"insufficient", []string{"brief", `{"rows":[["A","a"]]}`, `{"rows":[["A","a"]]}`}, 3},
 		{"wrong columns", []string{"brief", `{"rows":[["A"]]}`}, 2},
 		{"empty cell", []string{"brief", `{"rows":[["A",""]]}`}, 2},
-		{"excess candidates", []string{"brief", `{"rows":[["A","a"],["B","b"],["C","c"],["D","d"]]}`}, 2},
 		{"bad selection repair exhausted", []string{"brief", `{"rows":[["A","a"],["B","b"]]}`, `{"indices":[0,1]}`, `{"indices":[1,3]}`}, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
