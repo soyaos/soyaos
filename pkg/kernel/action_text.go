@@ -54,7 +54,7 @@ func validateActionText(content string, cfg *soyapack.TextValidation) error {
 		}
 	}
 	if count < cfg.MinChars || count > cfg.MaxChars {
-		return fmt.Errorf("section %q has %d letters/numbers, require %d..%d; shorten or expand actual text, do not self-report a word count", cfg.Section, count, cfg.MinChars, cfg.MaxChars)
+		return fmt.Errorf("section %q has %d letters/numbers, require %d..%d; rewrite toward %d actual letters/numbers to leave margin; do not self-report a word count", cfg.Section, count, cfg.MinChars, cfg.MaxChars, (cfg.MinChars+cfg.MaxChars)/2)
 	}
 	return nil
 }

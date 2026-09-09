@@ -148,17 +148,18 @@ type Prompt struct {
 
 // IndexedTable opts a three-stage chain into validated, programmatic table assembly.
 type IndexedTable struct {
-	TargetRows     int                 `yaml:"target_rows" json:"target_rows"`
-	CandidateRows  int                 `yaml:"candidate_rows" json:"candidate_rows"`
-	Columns        []string            `yaml:"columns" json:"columns"`
-	SheetName      string              `yaml:"sheet_name" json:"sheet_name"`
-	MaxRepairs     int                 `yaml:"max_repairs" json:"max_repairs"`
-	TimeoutSeconds int                 `yaml:"timeout_seconds" json:"timeout_seconds"`
-	BatchSize      int                 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-	MaxConcurrency int                 `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
-	ColumnRules    []IndexedColumnRule `yaml:"column_rules,omitempty" json:"column_rules,omitempty"`
-	BatchColumn    int                 `yaml:"batch_column,omitempty" json:"batch_column,omitempty"`
-	BatchValues    []string            `yaml:"batch_values,omitempty" json:"batch_values,omitempty"`
+	TargetRows      int                 `yaml:"target_rows" json:"target_rows"`
+	CandidateRows   int                 `yaml:"candidate_rows" json:"candidate_rows"`
+	Columns         []string            `yaml:"columns" json:"columns"`
+	SheetName       string              `yaml:"sheet_name" json:"sheet_name"`
+	MaxRepairs      int                 `yaml:"max_repairs" json:"max_repairs"`
+	TimeoutSeconds  int                 `yaml:"timeout_seconds" json:"timeout_seconds"`
+	BatchSize       int                 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	MaxConcurrency  int                 `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
+	ColumnRules     []IndexedColumnRule `yaml:"column_rules,omitempty" json:"column_rules,omitempty"`
+	BatchColumn     int                 `yaml:"batch_column,omitempty" json:"batch_column,omitempty"`
+	BatchValues     []string            `yaml:"batch_values,omitempty" json:"batch_values,omitempty"`
+	MinPerPartition int                 `yaml:"min_per_partition,omitempty" json:"min_per_partition,omitempty"`
 }
 
 // IndexedColumnRule is a deterministic opt-in constraint, not semantic review.
@@ -201,6 +202,9 @@ func (c *IndexedTable) Validate(steps int) error {
 			}
 			seenValues[value] = true
 		}
+	}
+	if c.MinPerPartition < 0 || (c.MinPerPartition > 0 && (len(c.BatchValues) == 0 || c.MinPerPartition > c.TargetRows/len(c.BatchValues))) {
+		return fmt.Errorf("indexed_table min_per_partition exceeds target or lacks partitions")
 	}
 	if len(c.Columns) == 0 || len(c.Columns) > 100 {
 		return fmt.Errorf("indexed_table requires 1..100 columns")

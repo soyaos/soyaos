@@ -90,6 +90,7 @@ func buildIndexedTableHandler(prompts []promptBody, provider llmcall.Provider, m
 				return fmt.Errorf("indexed_table requires %d unique rows, got %d after repair budget", cfg.TargetRows, len(rows))
 			}
 		}
+		rows = interleaveIndexedPartitions(rows, cfg)
 		candidateJSON, _ := json.Marshal(map[string]any{"rows": rows})
 		validationError := ""
 		var selected [][]string
@@ -103,6 +104,18 @@ func buildIndexedTableHandler(prompts []promptBody, provider llmcall.Provider, m
 				return err
 			}
 			selected, err = selectIndexedRows(content, rows, cfg.TargetRows)
+			if err == nil && cfg.MinPerPartition > 0 {
+				counts := map[string]int{}
+				for _, row := range selected {
+					counts[row[cfg.BatchColumn]]++
+				}
+				for _, partition := range cfg.BatchValues {
+					if counts[partition] < cfg.MinPerPartition {
+						err = fmt.Errorf("selection must include at least %d rows per partition; counts=%v", cfg.MinPerPartition, counts)
+						break
+					}
+				}
+			}
 			slog.Info("indexed_table selection validation", "repair", attempt > 0, "selected_count", len(selected), "target_count", cfg.TargetRows, "success", err == nil)
 			if err == nil {
 				break
@@ -237,6 +250,42 @@ dispatch:
 		rows = append(rows, batch...)
 	}
 	return rows, nil
+}
+
+// Interleave before assigning indices so prefix bias cannot erase late partitions.
+// Contents are unchanged; selection validation still enforces required coverage.
+func interleaveIndexedPartitions(rows [][]string, cfg soyapack.IndexedTable) [][]string {
+	if len(cfg.BatchValues) == 0 {
+		return rows
+	}
+	buckets := map[string][][]string{}
+	known := map[string]bool{}
+	for _, value := range cfg.BatchValues {
+		known[value] = true
+	}
+	var other [][]string
+	for _, row := range rows {
+		value := row[cfg.BatchColumn]
+		if known[value] {
+			buckets[value] = append(buckets[value], row)
+		} else {
+			other = append(other, row)
+		}
+	}
+	result := make([][]string, 0, len(rows))
+	for offset := 0; ; offset++ {
+		added := false
+		for _, value := range cfg.BatchValues {
+			if offset < len(buckets[value]) {
+				result = append(result, buckets[value][offset])
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return append(result, other...)
 }
 
 func matchesIndexedColumnRules(row []string, rules []soyapack.IndexedColumnRule) bool {
