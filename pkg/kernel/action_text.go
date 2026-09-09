@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/soyaos/soyaos/pkg/llmcall"
-	"github.com/soyaos/soyaos/pkg/soyapack"
 	"strings"
 	"unicode"
+
+	"github.com/soyaos/soyaos/pkg/llmcall"
+	"github.com/soyaos/soyaos/pkg/soyapack"
 )
 
 func validateActionText(content string, cfg *soyapack.TextValidation) error {
@@ -54,6 +55,10 @@ func validateActionText(content string, cfg *soyapack.TextValidation) error {
 		}
 	}
 	if count < cfg.MinChars || count > cfg.MaxChars {
+		if count > cfg.MaxChars {
+			target := (cfg.MinChars + cfg.MaxChars) / 2
+			return fmt.Errorf("section %q has %d letters/numbers, require %d..%d; delete about %d counted characters to reach %d, retaining about %d%% of the failed draft; shorten whole paragraphs and lists instead of merely changing individual words; do not self-report a word count", cfg.Section, count, cfg.MinChars, cfg.MaxChars, count-target, target, target*100/count)
+		}
 		return fmt.Errorf("section %q has %d letters/numbers, require %d..%d; rewrite toward %d actual letters/numbers to leave margin; do not self-report a word count", cfg.Section, count, cfg.MinChars, cfg.MaxChars, (cfg.MinChars+cfg.MaxChars)/2)
 	}
 	return nil
@@ -87,6 +92,8 @@ func collectValidatedAction(ctx context.Context, provider llmcall.Provider, decl
 		payload["previous_output"] = content
 		payload["validation_error"] = validationErr.Error()
 		data, _ := json.Marshal(payload)
-		req.Messages = []llmcall.Message{req.Messages[0], {Role: "user", Content: string(data)}}
+		system := req.Messages[0]
+		system.Content += "\nThis is a bounded repair of a failed draft. Preserve the original business constraints and required format, but do not preserve the draft's length or unsupported claims. Apply validation_error to previous_output; return only the corrected final content."
+		req.Messages = []llmcall.Message{system, {Role: "user", Content: string(data)}}
 	}
 }
