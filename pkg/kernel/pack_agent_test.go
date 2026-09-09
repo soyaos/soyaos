@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,52 @@ type fakeProvider struct {
 	got       []llmcall.Request
 	responses []string
 	calls     int
+}
+
+type terminalChunkProvider struct {
+	fakeProvider
+	chunks      []llmcall.Chunk
+	streamCalls int
+}
+
+func (p *terminalChunkProvider) GenerateStream(_ context.Context, _ llmcall.Request, out chan<- llmcall.Chunk) error {
+	p.streamCalls++
+	for _, chunk := range p.chunks {
+		out <- chunk
+	}
+	return nil
+}
+
+func TestStreamCollectCompletionReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		chunks  []llmcall.Chunk
+		want    string
+		wantErr string
+	}{
+		{name: "stop retains terminal delta", chunks: []llmcall.Chunk{{Delta: "hello "}, {Delta: "world", Done: true, FinishReason: "stop"}}, want: "hello world"},
+		{name: "length rejected", chunks: []llmcall.Chunk{{Delta: "partial"}, {Done: true, FinishReason: "length"}}, wantErr: "finish_reason=length"},
+		{name: "filter rejected", chunks: []llmcall.Chunk{{Delta: "partial"}, {Done: true, FinishReason: "content_filter"}}, wantErr: "finish_reason=content_filter"},
+		{name: "reason before done", chunks: []llmcall.Chunk{{Delta: "partial", FinishReason: "length"}, {Done: true}}, wantErr: "finish_reason=length"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &terminalChunkProvider{chunks: tc.chunks}
+			got, err := streamCollect(context.Background(), provider, llmcall.Request{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err=%v want=%s", err, tc.wantErr)
+				}
+				if got != "" {
+					t.Fatalf("incomplete content exposed: %q", got)
+				}
+			} else if err != nil || got != tc.want {
+				t.Fatalf("got=%q err=%v want=%q", got, err, tc.want)
+			}
+			if provider.streamCalls != 1 {
+				t.Fatalf("terminal result retried %d times", provider.streamCalls)
+			}
+		})
+	}
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
@@ -340,9 +387,7 @@ func TestRegisterFromPack_PromptSteps_TwoStepChain(t *testing.T) {
 	if !strings.Contains(fake.got[1].Messages[0].Content, "STEP2") {
 		t.Errorf("stage2 system: %q", fake.got[1].Messages[0].Content)
 	}
-	if fake.got[1].Messages[1].Content != "fetched-output" {
-		t.Errorf("stage2 user = %q, want stage1 output (fetched-output)", fake.got[1].Messages[1].Content)
-	}
+	assertChainEnvelope(t, fake.got[1].Messages[1], "morning news", "fetched-output")
 }
 
 func TestRegisterFromPack_PromptSteps_ThreeStepChainThreadsResponses(t *testing.T) {
@@ -393,8 +438,55 @@ func TestRegisterFromPack_PromptSteps_ThreeStepChainThreadsResponses(t *testing.
 		if !strings.Contains(got.Messages[0].Content, want.wantSystem) {
 			t.Errorf("stage[%d] system = %q, want substring %q", i, got.Messages[0].Content, want.wantSystem)
 		}
-		if got.Messages[1].Content != want.wantUser {
+		if i > 0 {
+			assertChainEnvelope(t, got.Messages[1], "title=春天的雨", want.wantUser)
+		} else if got.Messages[1].Content != want.wantUser {
 			t.Errorf("stage[%d] user = %q, want %q", i, got.Messages[1].Content, want.wantUser)
+		}
+	}
+}
+
+func assertChainEnvelope(t *testing.T, message llmcall.Message, original, previous string) {
+	t.Helper()
+	if message.Role != "user" {
+		t.Fatalf("chain data elevated to %s", message.Role)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(message.Content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["original_request"] != original || payload["previous_stage_output"] != previous {
+		t.Fatalf("chain payload lost original or previous content: %+v", payload)
+	}
+}
+
+func TestPackChainPreservesOriginalBriefAtEveryStage(t *testing.T) {
+	fake := &fakeProvider{responses: []string{"draft with </original_request> and \"quotes\"", "expanded draft", "final"}}
+	handler := buildPackHandler([]promptBody{{body: "collect"}, {body: "expand"}, {body: "dedupe"}}, fake, "real-model")
+	messages := []llmcall.Message{
+		{Role: "system", Content: "caller system must not become chain system"},
+		{Role: "user", Content: "杭州，1000万，新房和二手房，小红书视频获客；禁止虚构成交、价格和政策"},
+		{Role: "assistant", Content: "确认：只使用可核实事实，未知项标注待核实"},
+		{Role: "user", Content: "保留上述约束，生成500条"},
+	}
+	out := make(chan llmcall.Chunk, 4)
+	if err := handler(context.Background(), auth.Identity{}, llmcall.Request{Messages: messages}, out); err != nil {
+		t.Fatal(err)
+	}
+	original := combineUserMessages(messages)
+	if len(fake.got) != 3 {
+		t.Fatalf("calls=%d", len(fake.got))
+	}
+	for i, req := range fake.got {
+		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[0].Content != []string{"collect", "expand", "dedupe"}[i] {
+			t.Fatalf("stage %d system changed", i)
+		}
+		if i == 0 {
+			if req.Messages[1].Role != "user" || req.Messages[1].Content != original {
+				t.Fatal("initial brief lost")
+			}
+		} else {
+			assertChainEnvelope(t, req.Messages[1], original, fake.responses[i-1])
 		}
 	}
 }

@@ -11,7 +11,7 @@
 //	soyaos agent create <name>    scaffold a SoyaPack v0 Agent
 //	soyaos agent list             list registered Agents (talks to a running soyaos)
 //	soyaos agent run <slug> "..." invoke an Agent once (talks to a running soyaos)
-//	soyaos agent invoke <slug> "..." [--artifact xlsx --output FILE]
+//	soyaos agent invoke <slug> "..." [--max-tokens N] [--artifact xlsx --output FILE --expected-rows N]
 //	soyaos agent build [<path>]   build a canonical SoyaPack v0 .spk archive
 //	soyaos agent deploy <pack>    register a built .spk with a running soyaos
 //	soyaos pack validate <path>   parse + validate a SoyaPack v0 manifest
@@ -104,7 +104,7 @@ Usage:
   soyaos agent list [--rpc URL]   list Agents registered with a running soyaos
   soyaos agent run <slug> "<prompt>" [--listen URL]
                                   invoke an Agent and print its response
-  soyaos agent invoke <slug> "<prompt>" [--artifact xlsx|mp4 --output FILE]
+  soyaos agent invoke <slug> "<prompt>" [--max-tokens N] [--artifact xlsx|mp4 --output FILE] [--expected-rows N (xlsx only)]
                                   invoke and optionally render a real artifact
   soyaos agent build [<path>]     build a canonical SoyaPack v0 .spk archive
   soyaos agent deploy <pack> [--rpc URL]
@@ -424,7 +424,7 @@ func cmdAgentRun(args []string) error {
 		return errors.New("agent run: expected <slug> \"<prompt>\"")
 	}
 	slug, prompt := rest[0], strings.Join(rest[1:], " ")
-	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey)
+	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey, 0)
 	if err != nil {
 		return err
 	}
@@ -436,6 +436,8 @@ func cmdAgentInvoke(args []string) error {
 	fs := flag.NewFlagSet("agent invoke", flag.ContinueOnError)
 	listen := fs.String("listen", "http://"+openaicompat.DefaultListenAddr, "OpenAI-Compat gateway base URL")
 	apiKey := fs.String("key", "sk-soya-dev-local", "API key for authentication")
+	maxTokens := fs.Int("max-tokens", 0, "positive output token budget (omit to use gateway defaults)")
+	expectedRows := fs.Int("expected-rows", 0, "require exactly N populated primary-sheet rows (positive, xlsx only)")
 	artifactKind := fs.String("artifact", "", "artifact kind to render (xlsx or mp4)")
 	output := fs.String("output", "", "artifact output file")
 	schema := fs.String("schema", "", "artifact schema identifier (defaults by artifact kind)")
@@ -454,6 +456,25 @@ func cmdAgentInvoke(args []string) error {
 	if err := fs.Parse(reorderForFlagSet(fs, args)); err != nil {
 		return err
 	}
+	maxTokensSet := false
+	expectedRowsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "max-tokens" {
+			maxTokensSet = true
+		}
+		if f.Name == "expected-rows" {
+			expectedRowsSet = true
+		}
+	})
+	if maxTokensSet && *maxTokens <= 0 {
+		return errors.New("agent invoke: --max-tokens must be positive")
+	}
+	if expectedRowsSet && *expectedRows <= 0 {
+		return errors.New("agent invoke: --expected-rows must be positive")
+	}
+	if expectedRowsSet && *artifactKind != "xlsx" {
+		return errors.New("agent invoke: --expected-rows requires --artifact xlsx")
+	}
 	rest := fs.Args()
 	if len(rest) < 2 {
 		return errors.New("agent invoke: expected <slug> \"<prompt>\"")
@@ -466,7 +487,7 @@ func cmdAgentInvoke(args []string) error {
 	}
 
 	slug, prompt := rest[0], strings.Join(rest[1:], " ")
-	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey)
+	content, err := requestAgentCompletion(slug, prompt, *listen, *apiKey, *maxTokens)
 	if err != nil {
 		return err
 	}
@@ -480,7 +501,7 @@ func cmdAgentInvoke(args []string) error {
 		if resolvedSchema == "" {
 			resolvedSchema = "topics.v1"
 		}
-		if err := renderXLSXArtifact(content, resolvedSchema, *output); err != nil {
+		if err := renderXLSXArtifact(content, resolvedSchema, *output, *expectedRows); err != nil {
 			return err
 		}
 		fmt.Printf("rendered %s · schema=%s\n", *output, resolvedSchema)
@@ -510,12 +531,16 @@ func cmdAgentInvoke(args []string) error {
 	return nil
 }
 
-func requestAgentCompletion(slug, prompt, listen, apiKey string) (string, error) {
+func requestAgentCompletion(slug, prompt, listen, apiKey string, maxTokens int) (string, error) {
 
-	body, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model":    "soya:" + strings.TrimPrefix(slug, "soya:"),
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
-	})
+	}
+	if maxTokens > 0 {
+		payload["max_tokens"] = maxTokens
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(listen, "/")+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -548,7 +573,7 @@ func requestAgentCompletion(slug, prompt, listen, apiKey string) (string, error)
 	return out.Choices[0].Message.Content, nil
 }
 
-func renderXLSXArtifact(content, schema, output string) error {
+func renderXLSXArtifact(content, schema, output string, expectedRows int) error {
 	body := strings.TrimSpace(content)
 	if strings.HasPrefix(body, "```") {
 		if newline := strings.IndexByte(body, '\n'); newline >= 0 {
@@ -560,6 +585,15 @@ func renderXLSXArtifact(content, schema, output string) error {
 	if err := json.Unmarshal([]byte(body), &snapshot); err != nil {
 		return fmt.Errorf("agent invoke: response is not a valid xlsx snapshot: %w", err)
 	}
+	typed, err := artifact.NormalizeXLSXSnapshot(snapshot)
+	if err != nil {
+		return fmt.Errorf("agent invoke: invalid xlsx snapshot: %w", err)
+	}
+	if expectedRows != 0 {
+		if err := typed.ValidatePrimaryRowCount(expectedRows); err != nil {
+			return err
+		}
+	}
 	outputDir := filepath.Dir(output)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("agent invoke: create output directory: %w", err)
@@ -570,7 +604,7 @@ func renderXLSXArtifact(content, schema, output string) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := (artifact.XLSXRenderer{Schema: schema}).Render(context.Background(), snapshot, tmp); err != nil {
+	if _, err := (artifact.XLSXRenderer{Schema: schema}).Render(context.Background(), typed, tmp); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("agent invoke: render xlsx: %w", err)
 	}
