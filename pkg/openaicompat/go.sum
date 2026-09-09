@@ -12,8 +12,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/soyaos/soyaos/pkg/auth v0.1.0-alpha.2 h1:LEw8sAWfEFqf7s//YcP90mgLI9ZUwa/+XLi6GWH2e3Q=
 github.com/soyaos/soyaos/pkg/auth v0.1.0-alpha.2/go.mod h1:Qb72WUTJxrXIaZ1+VVAhQSzbEuRZIpUN9/55vkIpYCc=
-github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.4 h1:VkWj0tfSUFhcxGavBE9+fu+ex/JspDPVSHffhjyBvjM=
-github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.4/go.mod h1:KqqJhLDSYBUurA9qFbi9jVrvpm1G66EqWK939OSIzxg=
+github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.5 h1:Qdz6dvcGHYY4/UBOBZCflDgIZzhs+EoTGFscj2aeFE8=
+github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.5/go.mod h1:KuLrRgBlqji2lGf1DNwK/LfebOD7pkYjBo2xsqj+4vg=
 github.com/soyaos/soyaos/pkg/llmcall v0.1.0-alpha.4 h1:oXfilBJuwkDOhSxD0zOb2cwS9jlkyD6pkaoo86GvBoU=
 github.com/soyaos/soyaos/pkg/llmcall v0.1.0-alpha.4/go.mod h1:hA/eATFzqVMybzMPVDVrMLVQjM4mh67OClCnqqeSTSw=
 github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.4 h1:Tcs1D9gcGTJ2YfVb4L5M/fviyxRw+mCeg5AqRRiKlyE=
