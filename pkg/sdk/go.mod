@@ -4,13 +4,13 @@ go 1.23.0
 
 require (
 	github.com/soyaos/soyaos/pkg/auth v0.1.0-alpha.2
-	github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.2
-	github.com/soyaos/soyaos/pkg/llmcall v0.1.0-alpha.2
+	github.com/soyaos/soyaos/pkg/kernel v0.1.0-alpha.3
+	github.com/soyaos/soyaos/pkg/llmcall v0.1.0-alpha.3
 )
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.2 // indirect
+	github.com/soyaos/soyaos/pkg/soyapack v0.1.0-alpha.3 // indirect
 	github.com/soyaos/soyaos/pkg/state v0.1.0-alpha.2 // indirect
 	github.com/soyaos/soyaos/pkg/store v0.1.0-alpha.2 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
