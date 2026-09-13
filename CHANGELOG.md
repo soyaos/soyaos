@@ -9,6 +9,60 @@ Per **DD-003** (SoyaOS Design Decisions), versioning starts at `0.1.0`. The
 public API is unstable until `1.0.0`; expect breaking changes in `0.x` minor
 releases.
 
+## [0.1.0-alpha.2](https://github.com/soyaos/soyaos/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-09-13)
+
+
+### Features
+
+* **actions:** 交付有界审核与配套模块版本 ([59d0b12](https://github.com/soyaos/soyaos/commit/59d0b1296a7ccdb7be3a02f20dcababdfce22d19))
+* **actions:** 增加有界内容审核与标题编辑校验 ([f4551ea](https://github.com/soyaos/soyaos/commit/f4551ea23bd73f72a6721ae8c6dcc65039302b1b))
+* **agent:** 打通 EstateMuse 生产试用链路 ([9e45bd5](https://github.com/soyaos/soyaos/commit/9e45bd5d07cd25233ab09b0bba1f5818e37c8cca))
+* **ci:** 自动同步 Studio 发布产物 ([#11](https://github.com/soyaos/soyaos/issues/11)) ([c3a32e8](https://github.com/soyaos/soyaos/commit/c3a32e84f43ebbc97e5dda9e7e6912e2bee9f661))
+* **kernel:** 增加受校验的分批选题工作流 ([e02490b](https://github.com/soyaos/soyaos/commit/e02490be5fb8f433bf14ec1a05b64c47ff1890a8))
+* **kernel:** 增加受校验的分批选题工作流 ([#30](https://github.com/soyaos/soyaos/issues/30)) ([fd761a0](https://github.com/soyaos/soyaos/commit/fd761a09a02849bc282b1a7137b7ee12bcfe9f94))
+* **llm:** 支持 Compo 结构化快速生成 ([04f71b2](https://github.com/soyaos/soyaos/commit/04f71b2450669389716d46975c6b49fea98213e0))
+* **mesh:** 上线密文 QUIC relay ([9c31639](https://github.com/soyaos/soyaos/commit/9c31639c17937845df6c675d7f2efd79b4268d0b))
+* **nas:** 实现四协议客户端与验证 CLI ([6e586a6](https://github.com/soyaos/soyaos/commit/6e586a6307eca3f78cdfe4b8014104a6386ff7fe))
+* **runtime:** 接入 capability gate 执行边界 ([#25](https://github.com/soyaos/soyaos/issues/25)) ([de481f5](https://github.com/soyaos/soyaos/commit/de481f5366d030ec8be52791cddb7e5e19358e9b))
+* **silent-cut:** 打通直连 NAS 视频渲染链路 ([86c316e](https://github.com/soyaos/soyaos/commit/86c316e88a559d2d2be0719c1a7754f5f303481f))
+* **soyapack:** 增加选题表与稿件校验契约 ([#31](https://github.com/soyaos/soyaos/issues/31)) ([8be018c](https://github.com/soyaos/soyaos/commit/8be018cb00fe0c1bd3cc793f80f898a0476f3007))
+
+
+### Bug Fixes
+
+* **ci:** 允许 Studio 临时检出目录 ([#12](https://github.com/soyaos/soyaos/issues/12)) ([1a09087](https://github.com/soyaos/soyaos/commit/1a09087f72bd1e4510d15e2629466634cd0ac5d6))
+* **ci:** 对齐 Studio 同步提交的 DCO 身份 ([#14](https://github.com/soyaos/soyaos/issues/14)) ([1f2fb06](https://github.com/soyaos/soyaos/commit/1f2fb068d493c6e5c69f8ad70c7dec5ac308663b))
+* **ci:** 恢复模块标签发布 ([#23](https://github.com/soyaos/soyaos/issues/23)) ([33e22fb](https://github.com/soyaos/soyaos/commit/33e22fb2a997d033f1fa094695e428423b59c350))
+* **ci:** 替换容器内预发布模块依赖 ([#22](https://github.com/soyaos/soyaos/issues/22)) ([7a663ba](https://github.com/soyaos/soyaos/commit/7a663bac33af321150b8109092cd4e93126e436e))
+* **ci:** 模拟待发布模块标签 ([#20](https://github.com/soyaos/soyaos/issues/20)) ([f97381f](https://github.com/soyaos/soyaos/commit/f97381ff9206da92efda7b33937b1b94aad43960))
+* **ci:** 适配待发布模块容器构建 ([#21](https://github.com/soyaos/soyaos/issues/21)) ([a8fff04](https://github.com/soyaos/soyaos/commit/a8fff04c8817fd10345c48b009fae54cf1b8186d))
+* **kernel:** 按实际超长比例修复生成稿件 ([dcebe9a](https://github.com/soyaos/soyaos/commit/dcebe9a2ee062b94b7fa8e28054cd836cf71b718))
+* **kernel:** 约束选题分区并校验稿件实际字数 ([a6987ef](https://github.com/soyaos/soyaos/commit/a6987efbe49fe3a6d3fef922c024662ac33dc7a3))
+* **kernel:** 防止选题分区被前缀筛选遗漏 ([7a3c9ce](https://github.com/soyaos/soyaos/commit/7a3c9ce17add51b3faa3824f6bf50a9a1afea16f))
+* **release:** 延长 Go Proxy 索引等待窗口 ([#24](https://github.com/soyaos/soyaos/issues/24)) ([486b23d](https://github.com/soyaos/soyaos/commit/486b23d0a51f41ef28c5e17f411ab65462330e92))
+* **release:** 显式指定 GitHub 仓库上下文 ([529856f](https://github.com/soyaos/soyaos/commit/529856f7a9dcc43c5adf0f6ef67c667acfa4d2b6))
+* **release:** 显式指定 GitHub 仓库上下文 ([fa9f90c](https://github.com/soyaos/soyaos/commit/fa9f90c870eb263ea752a66c0962935250fd8eec))
+* **release:** 精确匹配镜像版本首行 ([81db542](https://github.com/soyaos/soyaos/commit/81db54235fd3eedf0553a88c374696f9604a2d01))
+* **release:** 精确匹配镜像版本首行 ([b091930](https://github.com/soyaos/soyaos/commit/b0919302efcaea5d5d7bfec78cf85763d9264c7b))
+
+
+### Code Refactoring
+
+* 迁移到 Go multi-module workspace ([#16](https://github.com/soyaos/soyaos/issues/16)) ([e7bafd7](https://github.com/soyaos/soyaos/commit/e7bafd7f9f16aa77829027c78ec259ec6e851d63))
+
+
+### Tests
+
+* **kernel:** 覆盖选题分区不足的修复与拒绝 ([24f7eaf](https://github.com/soyaos/soyaos/commit/24f7eafe937b3469c810143793fc1023a585f450))
+* **release:** 冒烟验证已发布容器镜像 ([3c86491](https://github.com/soyaos/soyaos/commit/3c86491d51fca516b93f1518d18a017195e4f7ee))
+* **release:** 冒烟验证已发布容器镜像 ([2725b14](https://github.com/soyaos/soyaos/commit/2725b140854c6c11ab0f1ab1046b6bffeeb404f0))
+
+
+### Continuous Integration
+
+* 自动化 Go 多模块持续发版 ([#18](https://github.com/soyaos/soyaos/issues/18)) ([edc9f6d](https://github.com/soyaos/soyaos/commit/edc9f6d3d1dfd4fd0b68b2f69e2da42d37051995))
+* 迁移到 DCO GitHub App ([#15](https://github.com/soyaos/soyaos/issues/15)) ([ef3da02](https://github.com/soyaos/soyaos/commit/ef3da02a6c6310af6d18bdc7e38b3c32563b80d5))
+
 ## [0.1.0-alpha.1](https://github.com/soyaos/soyaos/compare/v0.1.0-alpha.0...v0.1.0-alpha.1) (2026-08-11)
 
 
