@@ -12,6 +12,10 @@ func TestTextValidationBounds(t *testing.T) {
 		{TextValidation{MaxChars: 10, MinChars: 11}, false},
 		{TextValidation{MaxChars: 10, MaxRepairs: 3}, false},
 		{TextValidation{MaxChars: 10, ForbiddenPhrases: []string{""}}, false},
+		{TextValidation{Section: "口播全文", MaxChars: 130, MirrorTable: &TextMirrorTable{Section: "分镜", Column: "口播", Rows: 3}}, true},
+		{TextValidation{MaxChars: 130, MirrorTable: &TextMirrorTable{Section: "分镜", Column: "口播", Rows: 3}}, false},
+		{TextValidation{Section: "口播全文", MaxChars: 130, MirrorTable: &TextMirrorTable{Section: "分镜", Column: "口播", Rows: 0}}, false},
+		{TextValidation{Section: "口播全文", MaxChars: 130, MirrorTable: &TextMirrorTable{Section: "分镜", Column: "", Rows: 3}}, false},
 	} {
 		if err := tc.v.Validate(); (err == nil) != tc.ok {
 			t.Fatalf("cfg=%v err=%v", tc.v, err)

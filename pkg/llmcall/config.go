@@ -21,6 +21,7 @@ const (
 	// continue to receive the standard OpenAI request shape. Operators using
 	// mixed-thinking models (for example Qwen3.x) can set true or false.
 	EnvEnableThinking = "SOYA_MODEL_ENABLE_THINKING"
+	EnvThinkingBudget = "SOYA_MODEL_THINKING_BUDGET"
 )
 
 // Defaults applied by LoadConfigFromEnv when the corresponding env var is
@@ -45,6 +46,7 @@ type Config struct {
 	BaseURL        string
 	Model          string
 	EnableThinking *bool
+	ThinkingBudget int // optional vendor extension; zero omits it
 }
 
 // LoadConfigFromEnv reads the three SOYA_MODEL_* env vars and applies the
@@ -60,6 +62,9 @@ func LoadConfigFromEnv() Config {
 		if value, err := strconv.ParseBool(raw); err == nil {
 			cfg.EnableThinking = &value
 		}
+	}
+	if value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvThinkingBudget))); err == nil && value >= 1 && value <= 32768 {
+		cfg.ThinkingBudget = value
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = DefaultBaseURL

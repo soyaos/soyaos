@@ -306,6 +306,8 @@ type ActionDecl struct {
 	ID             string          `yaml:"id" json:"id"`
 	On             string          `yaml:"on" json:"on"` // per_row / button / api
 	Handler        string          `yaml:"handler" json:"handler"`
+	ReviewHandler  string          `yaml:"review_handler,omitempty" json:"review_handler,omitempty"` // optional Pack-relative semantic review prompt
+	PlanHandler    string          `yaml:"plan_handler,omitempty" json:"plan_handler,omitempty"`     // optional Pack-relative editorial planning prompt
 	Timeout        string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Artifacts      []string        `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
 	TextValidation *TextValidation `yaml:"text_validation,omitempty" json:"text_validation,omitempty"`
@@ -313,14 +315,27 @@ type ActionDecl struct {
 
 // TextValidation is an opt-in, deterministic text contract, not factual review.
 type TextValidation struct {
-	Section          string   `yaml:"section,omitempty" json:"section,omitempty"`
-	MinChars         int      `yaml:"min_chars,omitempty" json:"min_chars,omitempty"`
-	MaxChars         int      `yaml:"max_chars" json:"max_chars"`
-	MaxRepairs       int      `yaml:"max_repairs,omitempty" json:"max_repairs,omitempty"`
-	ForbiddenPhrases []string `yaml:"forbidden_phrases,omitempty" json:"forbidden_phrases,omitempty"`
+	MirrorTable      *TextMirrorTable `yaml:"mirror_table,omitempty" json:"mirror_table,omitempty"`
+	Section          string           `yaml:"section,omitempty" json:"section,omitempty"`
+	MinChars         int              `yaml:"min_chars,omitempty" json:"min_chars,omitempty"`
+	MaxChars         int              `yaml:"max_chars" json:"max_chars"`
+	MaxRepairs       int              `yaml:"max_repairs,omitempty" json:"max_repairs,omitempty"`
+	ForbiddenPhrases []string         `yaml:"forbidden_phrases,omitempty" json:"forbidden_phrases,omitempty"`
+}
+
+// TextMirrorTable requires a table column to reproduce the counted section.
+type TextMirrorTable struct {
+	Section string `yaml:"section" json:"section"`
+	Column  string `yaml:"column" json:"column"`
+	Rows    int    `yaml:"rows" json:"rows"`
 }
 
 func (v *TextValidation) Validate() error {
+	if m := v.MirrorTable; m != nil {
+		if strings.TrimSpace(v.Section) == "" || strings.TrimSpace(m.Section) == "" || strings.TrimSpace(m.Column) == "" || m.Rows < 1 || m.Rows > 100 {
+			return fmt.Errorf("text_validation mirror_table requires source section, table section, column and rows in 1..100")
+		}
+	}
 	if v.MinChars < 0 || v.MaxChars < 1 || v.MaxChars < v.MinChars || v.MaxChars > 100000 || v.MaxRepairs < 0 || v.MaxRepairs > 2 {
 		return fmt.Errorf("text_validation requires 0 <= min_chars <= max_chars <= 100000, max_chars > 0, and max_repairs in 0..2")
 	}

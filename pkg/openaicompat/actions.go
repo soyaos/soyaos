@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/kernel"
@@ -91,8 +92,19 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Preserve raw bytes until UTF-8 validation: decoding directly into strings
+	// replaces invalid bytes, hiding malformed edited_title values from Kernel.
+	var rawBody json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", err.Error())
+		return
+	}
+	if !utf8.Valid(rawBody) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", "request body must contain valid UTF-8")
+		return
+	}
 	var body actionRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(rawBody, &body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_body", err.Error())
 		return
 	}
@@ -115,6 +127,8 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	result, err := s.Kernel.InvokeAction(r.Context(), id, slug, actionID, body.RowID, body.Payload)
 	if err != nil {
 		switch {
+		case errors.Is(err, kernel.ErrInvalidActionPayload):
+			writeAPIError(w, http.StatusBadRequest, "invalid_payload", err.Error())
 		case errors.Is(err, kernel.ErrUnknownAgent):
 			writeAPIError(w, http.StatusNotFound, "unknown_agent", err.Error())
 		case errors.Is(err, kernel.ErrNoManifest):

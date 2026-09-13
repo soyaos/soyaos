@@ -14,11 +14,24 @@ func TestResolveConfig_NilDeclEqualsEnv(t *testing.T) {
 	t.Setenv(EnvBaseURL, "https://api.openai.com/v1")
 	t.Setenv(EnvModel, "gpt-4o-mini")
 	t.Setenv(EnvEnableThinking, "")
+	t.Setenv(EnvThinkingBudget, "")
 
 	got := ResolveConfig(nil)
 	want := LoadConfigFromEnv()
 	if got != want {
 		t.Fatalf("ResolveConfig(nil) = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadConfigFromEnvThinkingBudget(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{{"", 0}, {"512", 512}, {"1", 1}, {"32768", 32768}, {"0", 0}, {"-1", 0}, {"32769", 0}, {"oops", 0}} {
+		t.Setenv(EnvThinkingBudget, tc.raw)
+		if got := LoadConfigFromEnv().ThinkingBudget; got != tc.want {
+			t.Fatalf("budget %q -> %d, want %d", tc.raw, got, tc.want)
+		}
 	}
 }
 

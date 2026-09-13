@@ -19,7 +19,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/soyaos/soyaos/pkg/auth"
 	"github.com/soyaos/soyaos/pkg/soyapack"
@@ -32,6 +34,9 @@ var ErrUnknownAction = errors.New("kernel: unknown action id")
 // ErrNoManifest is returned by InvokeAction when the agent was registered
 // without a Manifest (so we don't know which actions are declared).
 var ErrNoManifest = errors.New("kernel: agent has no manifest")
+
+// ErrInvalidActionPayload indicates invalid caller-supplied action options.
+var ErrInvalidActionPayload = errors.New("kernel: invalid action payload")
 
 // ActionRequest is the input handed to an ActionHandler.
 type ActionRequest struct {
@@ -191,6 +196,21 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 	if err != nil {
 		return ActionResult{}, err
 	}
+	// Edits are explicit, invocation-local overrides. Never infer an edit from
+	// title itself, or from an edited_title persisted in an old workbook row.
+	var editedTitle, originalTitle string
+	if value, editing := payload["edited_title"]; editing {
+		var valid bool
+		editedTitle, valid = value.(string)
+		editedTitle = strings.TrimSpace(editedTitle)
+		if !valid || !utf8.ValidString(editedTitle) || editedTitle == "" || utf8.RuneCountInString(editedTitle) > 500 {
+			return ActionResult{}, fmt.Errorf("%w: edited_title must be a non-empty string of at most 500 characters", ErrInvalidActionPayload)
+		}
+		originalTitle, valid = stored["title"].(string)
+		if !valid || strings.TrimSpace(originalTitle) == "" || !utf8.ValidString(originalTitle) {
+			return ActionResult{}, fmt.Errorf("%w: edited_title requires a persisted row with a valid title", ErrInvalidActionPayload)
+		}
+	}
 	if stored != nil {
 		// Caller fields may carry action-specific options, but the persisted
 		// workbook row is authoritative for the original topic context.
@@ -202,6 +222,18 @@ func (k *Kernel) InvokeAction(ctx context.Context, id auth.Identity, slug, actio
 			merged[key] = value
 		}
 		req.Payload = merged
+	}
+	if editedTitle != "" {
+		req.Payload["original_title"] = originalTitle
+		req.Payload["edited_title"] = editedTitle
+		req.Payload["title"] = editedTitle
+		// Workbook headers remain in the payload alongside canonical names;
+		// keep their title aliases consistent for the downstream prompt.
+		for key := range req.Payload {
+			if canonicalRowField(key) == "title" {
+				req.Payload[key] = editedTitle
+			}
+		}
 	}
 	result, err := h(ctx, decl, req)
 	if ctx.Err() != nil {
