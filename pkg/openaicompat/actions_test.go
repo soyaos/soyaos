@@ -71,6 +71,68 @@ func TestActions_DispatchesKnownAction(t *testing.T) {
 	}
 }
 
+func TestActions_InvalidEditedTitleReturns400(t *testing.T) {
+	srv, key := newActionTestServer(t)
+	for _, payload := range []string{`{"edited_title":" "}`, `{"edited_title":42}`, `{"edited_title":"没有持久化原行的新标题"}`} {
+		t.Run(payload, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/agents/echo/actions/star", strings.NewReader(`{"row_id":"missing-row","payload":`+payload+`}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), `"invalid_payload"`) {
+				t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+func TestActions_RejectInvalidUTF8BeforeDecoding(t *testing.T) {
+	srv, key := newActionTestServer(t)
+	for _, tc := range []struct {
+		name, payload string
+		status        int
+	}{
+		{"invalid edited title bytes", `{"edited_title":"` + string([]byte{0xff}) + `"}`, http.StatusBadRequest},
+		{"valid replacement character", `{"hint":"�"}`, http.StatusOK},
+		{"valid Chinese text", `{"hint":"物业响应"}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/agents/echo/actions/star", strings.NewReader(`{"row_id":"row-42","payload":`+tc.payload+`}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+			}
+			if tc.status == http.StatusBadRequest && (!strings.Contains(string(body), `"invalid_request_body"`) || !strings.Contains(string(body), "UTF-8")) {
+				t.Fatalf("invalid bytes reached payload processing: %s", body)
+			}
+		})
+	}
+}
+
 func TestActions_UnknownActionReturns404(t *testing.T) {
 	srv, key := newActionTestServer(t)
 	req, _ := http.NewRequest(http.MethodPost,

@@ -220,7 +220,15 @@ func (p OpenAICompat) buildBody(req Request, stream bool) ([]byte, error) {
 	if req.MaxTokens != 0 {
 		payload["max_tokens"] = req.MaxTokens
 	}
-	if req.ResponseFormat != "" {
+	if req.ResponseJSONSchema != nil {
+		if req.ResponseFormat != "" && req.ResponseFormat != "json_schema" {
+			return nil, fmt.Errorf("llmcall: JSON schema conflicts with response format")
+		}
+		if req.ResponseJSONSchema.Name == "" || !json.Valid(req.ResponseJSONSchema.Schema) {
+			return nil, fmt.Errorf("llmcall: invalid response JSON schema")
+		}
+		payload["response_format"] = map[string]any{"type": "json_schema", "json_schema": req.ResponseJSONSchema}
+	} else if req.ResponseFormat != "" {
 		payload["response_format"] = map[string]string{"type": req.ResponseFormat}
 	}
 	// enable_thinking is intentionally opt-in. It is supported by several
@@ -228,6 +236,9 @@ func (p OpenAICompat) buildBody(req Request, stream bool) ([]byte, error) {
 	// unset config must therefore omit the field rather than send false.
 	if p.Cfg.EnableThinking != nil {
 		payload["enable_thinking"] = *p.Cfg.EnableThinking
+	}
+	if p.Cfg.ThinkingBudget > 0 {
+		payload["thinking_budget"] = p.Cfg.ThinkingBudget
 	}
 	return json.Marshal(payload)
 }

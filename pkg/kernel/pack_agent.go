@@ -506,7 +506,33 @@ func (k *Kernel) registerPackActions(m *soyapack.Manifest, packDir, slug string,
 			return fmt.Errorf("kernel: read pack %q actions[%d] (id=%q) handler %s: %w",
 				m.Name, i, decl.ID, decl.Handler, err)
 		}
-		k.RegisterPackAction(slug, decl.ID, buildPackActionHandler(string(body), provider, resolvedModel))
+		var reviewBody []byte
+		if decl.ReviewHandler != "" {
+			if !filepath.IsLocal(decl.ReviewHandler) {
+				return fmt.Errorf("kernel: action %q review_handler must be Pack-relative", decl.ID)
+			}
+			reviewBody, err = os.ReadFile(filepath.Join(packDir, decl.ReviewHandler))
+			if err != nil {
+				return fmt.Errorf("kernel: read action %q review_handler: %w", decl.ID, err)
+			}
+			if strings.TrimSpace(string(reviewBody)) == "" {
+				return fmt.Errorf("kernel: action %q review_handler is empty", decl.ID)
+			}
+		}
+		var planBody []byte
+		if decl.PlanHandler != "" {
+			if !filepath.IsLocal(decl.PlanHandler) || len(reviewBody) == 0 {
+				return fmt.Errorf("kernel: action %q plan_handler requires a Pack-relative path and review_handler", decl.ID)
+			}
+			planBody, err = os.ReadFile(filepath.Join(packDir, decl.PlanHandler))
+			if err != nil {
+				return fmt.Errorf("kernel: read action %q plan_handler: %w", decl.ID, err)
+			}
+			if strings.TrimSpace(string(planBody)) == "" {
+				return fmt.Errorf("kernel: action %q plan_handler is empty", decl.ID)
+			}
+		}
+		k.RegisterPackAction(slug, decl.ID, buildPackActionHandler(string(body), string(reviewBody), string(planBody), provider, resolvedModel))
 	}
 	return nil
 }
@@ -516,34 +542,62 @@ func (k *Kernel) registerPackActions(m *soyapack.Manifest, packDir, slug string,
 // message is a JSON-encoded { row_id, payload } object so the prompt
 // author can reference it directly. The full streamed response is
 // collected into ActionResult.Output["content"].
-func buildPackActionHandler(promptBody string, provider llmcall.Provider, resolvedModel string) ActionHandler {
+func buildPackActionHandler(promptBody, reviewBody, planBody string, provider llmcall.Provider, resolvedModel string) ActionHandler {
 	return func(ctx context.Context, decl soyapack.ActionDecl, req ActionRequest) (ActionResult, error) {
 		userPayload, err := encodeActionUserPayload(req.RowID, req.Payload)
 		if err != nil {
 			return ActionResult{}, fmt.Errorf("kernel: encode action payload: %w", err)
 		}
-		content, err := collectValidatedAction(ctx, provider, decl, userPayload, llmcall.Request{
+		draftPayload := userPayload
+		if planBody != "" {
+			plan, err := streamCollect(ctx, provider, llmcall.Request{Model: resolvedModel, Temperature: 0.2, Stream: true,
+				Messages: []llmcall.Message{{Role: "system", Content: planBody}, {Role: "user", Content: userPayload}},
+			})
+			if err != nil {
+				return ActionResult{}, fmt.Errorf("kernel: action planning: %w", err)
+			}
+			if strings.TrimSpace(plan) == "" {
+				return ActionResult{}, fmt.Errorf("kernel: action planning returned empty content")
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(userPayload), &envelope); err != nil {
+				return ActionResult{}, err
+			}
+			envelope["editorial_plan"] = plan
+			encoded, err := json.Marshal(envelope)
+			if err != nil {
+				return ActionResult{}, err
+			}
+			draftPayload = string(encoded)
+		}
+		generation := llmcall.Request{
 			Model: resolvedModel,
 			Messages: []llmcall.Message{
 				{Role: "system", Content: promptBody},
-				{Role: "user", Content: userPayload},
+				{Role: "user", Content: draftPayload},
 			},
 			Stream: true,
-		})
+		}
+		if reviewBody != "" {
+			generation.Temperature = 0.2
+		}
+		content, err := collectValidatedAction(ctx, provider, decl, userPayload, generation, reviewBody)
 		if err != nil {
 			return ActionResult{}, fmt.Errorf("kernel: action %q upstream: %w", decl.ID, err)
 		}
+		output := map[string]any{
+			"content": content, "handler": decl.Handler, "artifacts": decl.Artifacts,
+		}
+		if reviewBody != "" {
+			output["semantic_review"] = "passed"
+		}
 		return ActionResult{
-			TaskID:    newTaskID(),
-			Status:    "done",
-			AgentSlug: req.AgentSlug,
-			ActionID:  decl.ID,
-			RowID:     req.RowID,
-			Output: map[string]any{
-				"content":   content,
-				"handler":   decl.Handler,
-				"artifacts": decl.Artifacts,
-			},
+			TaskID:     newTaskID(),
+			Status:     "done",
+			AgentSlug:  req.AgentSlug,
+			ActionID:   decl.ID,
+			RowID:      req.RowID,
+			Output:     output,
 			EnqueuedAt: time.Now(),
 		}, nil
 	}

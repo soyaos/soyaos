@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -61,10 +62,17 @@ func validateActionText(content string, cfg *soyapack.TextValidation) error {
 		}
 		return fmt.Errorf("section %q has %d letters/numbers, require %d..%d; rewrite toward %d actual letters/numbers to leave margin; do not self-report a word count", cfg.Section, count, cfg.MinChars, cfg.MaxChars, (cfg.MinChars+cfg.MaxChars)/2)
 	}
+	if cfg.MirrorTable != nil {
+		return validateActionMirrorTable(content, body, cfg.MirrorTable)
+	}
 	return nil
 }
 
-func collectValidatedAction(ctx context.Context, provider llmcall.Provider, decl soyapack.ActionDecl, original string, req llmcall.Request) (string, error) {
+func collectValidatedAction(ctx context.Context, provider llmcall.Provider, decl soyapack.ActionDecl, original string, req llmcall.Request, reviewPrompts ...string) (string, error) {
+	var drafting map[string]json.RawMessage
+	if len(req.Messages) > 1 {
+		_ = json.Unmarshal([]byte(req.Messages[1].Content), &drafting)
+	}
 	repairs := 0
 	if decl.TextValidation != nil {
 		if err := decl.TextValidation.Validate(); err != nil {
@@ -78,6 +86,16 @@ func collectValidatedAction(ctx context.Context, provider llmcall.Provider, decl
 			return "", err
 		}
 		validationErr := validateActionText(content, decl.TextValidation)
+		if len(reviewPrompts) > 0 && reviewPrompts[0] != "" {
+			// Collect both kinds of feedback before spending the shared repair.
+			// Otherwise a length-only repair can exhaust the budget before the
+			// generator is ever told about an unsupported inference.
+			semanticErr, err := reviewActionText(ctx, provider, req.Model, reviewPrompts[0], original, content, decl.ID)
+			if err != nil {
+				return "", err
+			}
+			validationErr = errors.Join(validationErr, semanticErr)
+		}
 		if validationErr == nil {
 			return content, nil
 		}
@@ -89,6 +107,9 @@ func collectValidatedAction(ctx context.Context, provider llmcall.Provider, decl
 			return "", err
 		}
 		payload["repair"] = true
+		if plan, ok := drafting["editorial_plan"]; ok {
+			payload["editorial_plan"] = plan
+		}
 		payload["previous_output"] = content
 		payload["validation_error"] = validationErr.Error()
 		data, _ := json.Marshal(payload)

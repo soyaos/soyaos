@@ -11,6 +11,7 @@ package llmcall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 )
 
@@ -32,6 +33,15 @@ type Request struct {
 	// provider supports the OpenAI response_format extension. Empty means the
 	// provider default; "json_object" requests syntactically valid JSON.
 	ResponseFormat string
+	// ResponseJSONSchema requests strict structured output when supported.
+	// It must not be combined with a different ResponseFormat.
+	ResponseJSONSchema *JSONSchema
+}
+
+type JSONSchema struct {
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // Response is a non-streamed chat-completion result.

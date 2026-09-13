@@ -202,6 +202,38 @@ func TestOpenAICompatBuildBodyOptionalThinking(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatResponseSchema(t *testing.T) {
+	p := OpenAICompat{Cfg: Config{Model: "x"}}
+	schema := &JSONSchema{Name: "test", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)}
+	for _, stream := range []bool{false, true} {
+		body, err := p.buildBody(Request{ResponseJSONSchema: schema}, stream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Format struct {
+				Type   string     `json:"type"`
+				Schema JSONSchema `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Format.Type != "json_schema" || got.Format.Schema.Name != "test" || !got.Format.Schema.Strict || string(got.Format.Schema.Schema) != string(schema.Schema) {
+			t.Fatalf("schema was not preserved: %s", body)
+		}
+	}
+	for _, req := range []Request{
+		{ResponseFormat: "json_object", ResponseJSONSchema: schema},
+		{ResponseJSONSchema: &JSONSchema{Schema: schema.Schema}},
+		{ResponseJSONSchema: &JSONSchema{Name: "bad", Schema: json.RawMessage(`{`)}},
+	} {
+		if _, err := p.buildBody(req, false); err == nil {
+			t.Fatal("invalid or conflicting schema accepted")
+		}
+	}
+}
+
 func TestHostOf(t *testing.T) {
 	cases := map[string]string{
 		"https://api.openai.com/v1":   "api.openai.com",
@@ -212,6 +244,24 @@ func TestHostOf(t *testing.T) {
 	for in, want := range cases {
 		if got := hostOf(in); got != want {
 			t.Errorf("hostOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestOpenAICompatThinkingBudgetIsOptIn(t *testing.T) {
+	for _, budget := range []int{0, 512} {
+		p := OpenAICompat{Cfg: Config{Model: "test", ThinkingBudget: budget}}
+		body, err := p.buildBody(Request{}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		got, exists := payload["thinking_budget"]
+		if budget == 0 && exists || budget > 0 && (!exists || got != float64(budget)) {
+			t.Fatalf("budget=%d payload=%s", budget, body)
 		}
 	}
 }

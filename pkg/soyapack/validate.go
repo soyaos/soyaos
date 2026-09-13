@@ -3,7 +3,9 @@ package soyapack
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -169,6 +171,12 @@ func Validate(m *Manifest) error {
 
 	// --- actions ------------------------------------------------------------
 	for i, a := range m.Actions {
+		if a.PlanHandler != "" && (!filepath.IsLocal(a.PlanHandler) || strings.TrimSpace(a.PlanHandler) == "" || a.ReviewHandler == "") {
+			return wrap("actions[%d].plan_handler requires a Pack-relative path and review_handler", i)
+		}
+		if a.ReviewHandler != "" && (!filepath.IsLocal(a.ReviewHandler) || strings.TrimSpace(a.ReviewHandler) == "") {
+			return wrap("actions[%d].review_handler must be a nonempty Pack-relative path", i)
+		}
 		if a.TextValidation != nil {
 			if err := a.TextValidation.Validate(); err != nil {
 				return wrap("actions[%d]: %v", i, err)
